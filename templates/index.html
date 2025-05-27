@@ -21,23 +21,45 @@
         body {
             font-family: 'Inter', sans-serif;
         }
+
         .tab-button {
             transition: background-color 0.3s ease, color 0.3s ease;
         }
-        .tab-button.active {
-            background-color: #4f46e5; /* indigo-600 */
-            color: white;
-            border-bottom: 2px solid #818cf8; /* indigo-400 */
-        }
-        .tab-button:not(.active) {
-            background-color: #374151; /* slate-700 */
-            color: #9ca3af; /* slate-400 */
-        }
-        .tab-button:not(.active):hover {
-            background-color: #4b5563; /* slate-600 */
-            color: #d1d5db; /* slate-300 */
-        }
+
+            .tab-button.active {
+                background-color: #4f46e5; /* indigo-600 */
+                color: white;
+                border-bottom: 2px solid #818cf8; /* indigo-400 */
+            }
+
+            .tab-button:not(.active) {
+                background-color: #374151; /* slate-700 */
+                color: #9ca3af; /* slate-400 */
+            }
+
+                .tab-button:not(.active):hover {
+                    background-color: #4b5563; /* slate-600 */
+                    color: #d1d5db; /* slate-300 */
+                }
+
         .tab-panel {
+            /* Styles for tab panels if needed, e.g., for transitions, but 'hidden' class handles visibility */
+        }
+        /* Animation for fading in results */
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .animate-fadeIn {
+            animation: fadeIn 0.5s ease-out forwards;
         }
     </style>
 </head>
@@ -72,28 +94,39 @@
                                class="w-full p-3 bg-slate-700 border border-slate-600 rounded-lg text-slate-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition duration-150"
                                placeholder="e.g., Sparkle Cleaners, The Cozy Corner Cafe">
                     </div>
-                    
+
                     <div>
-                        <label for="businessType" class="block text-sm font-medium text-slate-300 mb-1">Type of Business</label>
-                        <select name="businessType" id="businessType" required
-                                class="w-full p-3 bg-slate-700 border border-slate-600 rounded-lg text-slate-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition duration-150">
-                            <option value="" disabled selected>Select a business type</option>
-                            <option value="Fashion Boutique / Tailor">Fashion Boutique / Tailor</option>
-                            <option value="Beauty Salon / Spa">Beauty Salon / Spa</option>
-                            <option value="Barber Shop">Barber Shop</option>
-                            <option value="Restaurant / Cafe / Bukka / Lounge">Restaurant / Cafe / Bukka / Lounge</option>
-                            <option value="Grocery Store / Supermarket">Grocery Store / Supermarket</option>
-                            <option value="Bakery / Confectionery">Bakery / Confectionery</option>
-                            <option value="Electronics Store / Repair">Electronics Store / Repair</option>
-                            <option value="Pharmacy / Chemist">Pharmacy / Chemist</option>
-                            <option value="Event Planner / Services">Event Planner / Services</option>
-                            <option value="Cleaning Services">Cleaning Services</option>
-                            <option value="Consulting Services (Business, IT, etc.)">Consulting Services (Business, IT, etc.)</option>
-                            <option value="Real Estate Agency">Real Estate Agency</option>
-                            <option value="Printing / Photocopy / Cyber Cafe">Printing / Photocopy / Cyber Cafe</option>
-                            <option value="Other Local Business">Other Local Business</option>
-                        </select>
+                        <div>
+                            <label for="businessType" class="block text-sm font-medium text-slate-300 mb-1">Type of Business</label>
+                            <select name="businessType" id="businessType" required
+                                    class="w-full p-3 bg-slate-700 border border-slate-600 rounded-lg text-slate-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition duration-150">
+                                <option value="" disabled selected>Select a business type</option>
+                                <option value="Bakery / Confectionery">Bakery / Confectionery</option>
+                                <option value="Barber Shop">Barber Shop</option>
+                                <option value="Beauty Salon / Spa">Beauty Salon / Spa</option>
+                                <option value="Cleaning Services">Cleaning Services</option>
+                                <option value="Consulting Services (Business, IT, etc.)">Consulting Services (Business, IT, etc.)</option>
+                                <option value="Electronics Store / Repair">Electronics Store / Repair</option>
+                                <option value="Event Planner / Services">Event Planner / Services</option>
+                                <option value="Fashion Boutique / Tailor">Fashion Boutique / Tailor</option>
+                                <option value="Grocery Store / Supermarket">Grocery Store / Supermarket</option>
+                                <option value="Hotels">Hotels</option> {/* New */}
+                               <option  value="Interior Decoration">Interior Decoration</option>
+                                <option value="Laundry Services">Laundry Services</option> {/* New - good to distinguish from general 'Cleaning' */}
+                                <option value="Nutritionist">Nutritionist</option> {/* New */}
+                                <option value="Make up Artist">Make up Artist</option>
+                                <option value="Organic Products">Organic Products</option> {/* New */}
+                                <option value="Pharmacy / Chemist">Pharmacy / Chemist</option>
+                                <option value="Printing / Photocopy / Cyber Cafe">Printing / Photocopy / Cyber Cafe</option>
+                                <option value="Real Estate Agency">Real Estate Agency</option>
+                                <option value="Restaurant / Cafe / Bukka / Lounge">Restaurant / Cafe / Bukka / Lounge</option>
+                                <option value="Service Apartments / Short let">Service Apartments / Short let</option> {/* New */}
+                                <option value="Skin Care Products / Services">Skin Care Products / Services</option> {/* New */}
+                                <option value="Other Local Business">Other Local Business</option>
+                            </select>
+                        </div>>
                     </div>
+
                     <div>
                         <label for="postType" class="block text-sm font-medium text-slate-300 mb-1">What's the Caption For?</label>
                         <select name="postType" id="postType"
@@ -109,12 +142,21 @@
                             <option value="update_announcement">General Update/Announcement</option>
                         </select>
                     </div>
+
                     <div>
                         <label for="keyMessage" class="block text-sm font-medium text-slate-300 mb-1">Key Message / Product/Service Details / Offer Info</label>
-                        <textarea name="keyMessage" id="keyMessage" rows="4" required
+                        <textarea name="keyMessage" id="keyMessage" rows="3" required
                                   class="w-full p-3 bg-slate-700 border border-slate-600 rounded-lg text-slate-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition duration-150"
                                   placeholder="e.g., Our new organic coffee blend is here! Or, Get 20% off all haircuts this Tuesday."></textarea>
                     </div>
+
+                    <div>
+                        <label for="localBizTargetAudience" class="block text-sm font-medium text-slate-300 mb-1">Describe Your Target Audience/Customer (Optional)</label>
+                        <textarea name="targetAudience" id="localBizTargetAudience" rows="2"
+                                  class="w-full p-3 bg-slate-700 border border-slate-600 rounded-lg text-slate-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition duration-150"
+                                  placeholder="e.g., Young professionals in Lagos, mothers interested in eco-friendly products, local Gwarinpa residents etc."></textarea>
+                    </div>
+
                     <div>
                         <label for="tone" class="block text-sm font-medium text-slate-300 mb-1">Desired Tone</label>
                         <select name="tone" id="tone"
@@ -168,8 +210,8 @@
             </section>
 
             <section id="artisanTool" class="tab-panel hidden">
-                 <h2 class="text-2xl font-semibold text-center text-teal-400 mb-6">Artisan & Handmade Seller Storyteller</h2>
-                 <form id="artisanDescriptionForm" class="space-y-6">
+                <h2 class="text-2xl font-semibold text-center text-teal-400 mb-6">Artisan & Handmade Seller Storyteller</h2>
+                <form id="artisanDescriptionForm" class="space-y-6">
                     <div>
                         <label for="creatorName" class="block text-sm font-medium text-slate-300 mb-1">Creator/Brand Name (Optional)</label>
                         <input type="text" name="creatorName" id="creatorName"
@@ -188,7 +230,7 @@
                                class="w-full p-3 bg-slate-700 border border-slate-600 rounded-lg text-slate-100 focus:ring-2 focus:ring-teal-500 focus:border-teal-500 transition duration-150"
                                placeholder="e.g., Jewelry, Pottery, Textile Art, Soap, Candle, Woodcraft">
                     </div>
-                     <div>
+                    <div>
                         <label for="keyMaterials" class="block text-sm font-medium text-slate-300 mb-1">Key Materials Used</label>
                         <input type="text" name="keyMaterials" id="keyMaterials" required
                                class="w-full p-3 bg-slate-700 border border-slate-600 rounded-lg text-slate-100 focus:ring-2 focus:ring-teal-500 focus:border-teal-500 transition duration-150"
@@ -202,16 +244,24 @@
                     </div>
                     <div>
                         <label for="inspiration" class="block text-sm font-medium text-slate-300 mb-1">Inspiration / Story Behind Product (Optional, brief)</label>
-                        <textarea name="inspiration" id="inspiration" rows="3"
+                        <textarea name="inspiration" id="inspiration" rows="2"
                                   class="w-full p-3 bg-slate-700 border border-slate-600 rounded-lg text-slate-100 focus:ring-2 focus:ring-teal-500 focus:border-teal-500 transition duration-150"
                                   placeholder="e.g., Inspired by Onitsha market vibrancy, a childhood memory of village weaving"></textarea>
                     </div>
-                     <div>
+                    <div>
                         <label for="uniqueSellingPoints" class="block text-sm font-medium text-slate-300 mb-1">Unique Selling Points / Customer Benefits</label>
                         <textarea name="uniqueSellingPoints" id="uniqueSellingPoints" rows="3" required
                                   class="w-full p-3 bg-slate-700 border border-slate-600 rounded-lg text-slate-100 focus:ring-2 focus:ring-teal-500 focus:border-teal-500 transition duration-150"
                                   placeholder="e.g., One-of-a-kind design, perfect for sensitive skin, supports local artisans, tells a unique cultural story"></textarea>
                     </div>
+
+                    <div>
+                        <label for="artisanTargetAudience" class="block text-sm font-medium text-slate-300 mb-1">Describe Your Target Audience/Customer (Optional)</label>
+                        <textarea name="targetAudience" id="artisanTargetAudience" rows="2"
+                                  class="w-full p-3 bg-slate-700 border border-slate-600 rounded-lg text-slate-100 focus:ring-2 focus:ring-teal-500 focus:border-teal-500 transition duration-150"
+                                  placeholder="e.g., Art collectors, people seeking unique gifts, tourists in Abuja, etc."></textarea>
+                    </div>
+
                     <div>
                         <label for="artisanTone" class="block text-sm font-medium text-slate-300 mb-1">Desired Tone for Description</label>
                         <select name="artisanTone" id="artisanTone"
@@ -225,7 +275,7 @@
                         </select>
                     </div>
                     <div class="flex items-center justify-end">
-                         <div>
+                        <div>
                             <label for="numVariationsArtisan" class="text-sm font-medium text-slate-300 mr-2">Variations:</label>
                             <select name="numVariations" id="numVariationsArtisan" class="p-2 bg-slate-700 border border-slate-600 rounded-lg text-slate-100 focus:ring-1 focus:ring-teal-500 focus:border-teal-500 text-sm">
                                 <option value="1">1</option>
@@ -240,8 +290,8 @@
                             🎨 Generate Product Descriptions
                         </button>
                     </div>
-                 </form>
-                 <div id="artisanResultsArea" class="mt-10"></div>
+                </form>
+                <div id="artisanResultsArea" class="mt-10"></div>
             </section>
         </div>
     </div>
@@ -269,24 +319,23 @@
 
         tabButtons.localBiz.addEventListener('click', () => switchTab('localBiz'));
         tabButtons.artisan.addEventListener('click', () => switchTab('artisan'));
-        switchTab('localBiz');
-
+        switchTab('localBiz'); // Initialize tabs
 
         // --- Reusable helper function for handling fetch and results ---
         async function handleFormSubmit(formElement, resultsAreaElement, endpoint, resultKeyName) {
-            formElement.addEventListener('submit', async function(event) {
+            formElement.addEventListener('submit', async function (event) {
                 event.preventDefault();
                 const formData = new FormData(formElement);
                 const data = Object.fromEntries(formData.entries());
-                
+
                 resultsAreaElement.innerHTML = `
-                    <div class="flex justify-center items-center p-6">
-                        <div class="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-purple-500"></div>
-                        <p class="ml-3 text-slate-400">Generating your content...</p>
-                    </div>`;
+            <div class="flex justify-center items-center p-6">
+                <div class="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-purple-500"></div>
+                <p class="ml-3 text-slate-400">Generating your content...</p>
+            </div>`;
 
                 try {
-                    const response = await fetch(endpoint, { 
+                    const response = await fetch(endpoint, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(data),
@@ -297,56 +346,123 @@
                         try {
                             const errorResult = await response.json();
                             errorText = errorResult.error || errorText;
-                        } catch (e) { /* ignore */ }
+                        } catch (e) { /* ignore if response is not json */ }
                         throw new Error(errorText);
                     }
 
-                    const results = await response.json(); 
-                    resultsAreaElement.innerHTML = ''; 
+                    const results = await response.json();
+                    resultsAreaElement.innerHTML = '';
 
                     if (results[resultKeyName] && results[resultKeyName].length > 0) {
                         results[resultKeyName].forEach(itemText => {
                             const itemElement = document.createElement('div');
                             itemElement.className = 'bg-slate-700 p-4 rounded-lg shadow mb-4 animate-fadeIn';
-                            
-                            const textElement = document.createElement('p');
-                            textElement.className = 'text-slate-200 mb-3 whitespace-pre-wrap';
-                            textElement.textContent = itemText;
-                            
-                            const copyButton = document.createElement('button');
-                            copyButton.className = 'text-sm text-indigo-400 hover:text-indigo-300 font-medium px-3 py-1 rounded-md border border-indigo-400 hover:bg-indigo-500 hover:text-white transition-colors duration-150';
-                            copyButton.textContent = 'Copy';
-                            copyButton.onclick = function() {
-                                navigator.clipboard.writeText(itemText)
-                                    .then(() => {
-                                        copyButton.textContent = 'Copied!';
-                                        setTimeout(() => { copyButton.textContent = 'Copy'; }, 2000);
-                                    })
-                                    .catch(err => {
-                                        console.error('Failed to copy: ', err);
-                                         try { // Fallback
-                                            const textArea = document.createElement("textarea");
-                                            textArea.value = itemText;
-                                            textArea.style.position = "fixed";
-                                            document.body.appendChild(textArea);
-                                            textArea.focus();
-                                            textArea.select();
-                                            document.execCommand('copy');
-                                            document.body.removeChild(textArea);
-                                            copyButton.textContent = 'Copied!';
-                                            setTimeout(() => { copyButton.textContent = 'Copy'; }, 2000);
-                                        } catch (execCommandErr) {
-                                            alert('Failed to copy text. Please copy manually.');
-                                        }
-                                    });
-                            };
-                            
-                            itemElement.appendChild(textElement);
-                            itemElement.appendChild(copyButton);
+
+                            const visualSuggestionMarker = "Visual Suggestion:";
+                            let vsStartIndex = itemText.indexOf(visualSuggestionMarker);
+                            let mainContent = itemText;
+                            let visualSuggestionText = "";
+
+                            if (vsStartIndex !== -1) {
+                                // Try to find a newline just before "Visual Suggestion:" for a clean split
+                                let splitPoint = itemText.lastIndexOf('\n', vsStartIndex);
+
+                                if (splitPoint !== -1 && itemText.substring(splitPoint, vsStartIndex).trim() === "") {
+                                    // Found a newline directly before "Visual Suggestion:", split cleanly
+                                    mainContent = itemText.substring(0, splitPoint).trim();
+                                    visualSuggestionText = itemText.substring(splitPoint + 1).trim(); // +1 to skip the newline
+                                } else if (vsStartIndex === 0) {
+                                    // "Visual Suggestion:" is at the very beginning
+                                    mainContent = "";
+                                    visualSuggestionText = itemText.trim();
+                                } else {
+                                    // "Visual Suggestion:" is present, but not immediately preceded by its own newline.
+                                    // Split directly before "Visual Suggestion:"
+                                    mainContent = itemText.substring(0, vsStartIndex).trim();
+                                    visualSuggestionText = itemText.substring(vsStartIndex).trim();
+                                }
+                                // Final check: ensure the extracted visualSuggestionText actually starts with the marker
+                                if (!visualSuggestionText.startsWith(visualSuggestionMarker)) {
+                                    mainContent = itemText; // If split was not clean, revert to showing full text as main
+                                    visualSuggestionText = ""; // And no separate visual suggestion
+                                }
+                            }
+
+                            // Add main content paragraph (even if it's the full itemText)
+                            if (mainContent || (vsStartIndex === -1 && itemText)) { // Ensure we add a p even if mainContent is empty but vsStartIndex was 0
+                                const mainTextElement = document.createElement('p');
+                                mainTextElement.className = 'text-slate-200 mb-2 whitespace-pre-wrap';
+                                mainTextElement.textContent = mainContent;
+                                itemElement.appendChild(mainTextElement);
+                            }
+
+
+                            // Add styled visual suggestion paragraph if it exists
+                            if (visualSuggestionText) {
+                                const visualTextElement = document.createElement('p');
+                                visualTextElement.className = 'text-orange-400 italic text-sm mt-1 whitespace-pre-wrap'; // Sky blue, italic, small
+                                visualTextElement.textContent = visualSuggestionText;
+                                itemElement.appendChild(visualTextElement);
+                            }
+
+                            // --- Create Copy Buttons ---
+                            const buttonContainer = document.createElement('div');
+                            buttonContainer.className = 'mt-3 flex space-x-2';
+
+                            if (visualSuggestionText && mainContent) {
+                                const copyCaptionButton = document.createElement('button');
+                                copyCaptionButton.className = 'text-xs text-indigo-400 hover:text-indigo-300 font-medium px-2 py-1 rounded-md border border-indigo-400 hover:bg-indigo-500 hover:text-white transition-colors duration-150';
+                                copyCaptionButton.textContent = 'Copy Caption';
+                                copyCaptionButton.onclick = function () {
+                                    navigator.clipboard.writeText(mainContent)
+                                        .then(() => {
+                                            copyCaptionButton.textContent = 'Copied Caption!';
+                                            setTimeout(() => { copyCaptionButton.textContent = 'Copy Caption'; }, 2000);
+                                        })
+                                        .catch(err => {
+                                            alert('Failed to copy caption. Please select and copy manually.');
+                                        });
+                                };
+                                buttonContainer.appendChild(copyCaptionButton);
+
+                                const copyFullButton = document.createElement('button');
+                                copyFullButton.className = 'text-xs text-indigo-400 hover:text-indigo-300 font-medium px-2 py-1 rounded-md border border-indigo-400 hover:bg-indigo-500 hover:text-white transition-colors duration-150';
+                                copyFullButton.textContent = 'Copy Full';
+                                copyFullButton.onclick = function () {
+                                    navigator.clipboard.writeText(itemText)
+                                        .then(() => {
+                                            copyFullButton.textContent = 'Copied Full!';
+                                            setTimeout(() => { copyFullButton.textContent = 'Copy Full'; }, 2000);
+                                        })
+                                        .catch(err => {
+                                            alert('Failed to copy full text. Please select and copy manually.');
+                                        });
+                                };
+                                buttonContainer.appendChild(copyFullButton);
+
+                            } else {
+                                const copyTextButton = document.createElement('button');
+                                copyTextButton.className = 'text-sm text-indigo-400 hover:text-indigo-300 font-medium mt-3 px-3 py-1 rounded-md border border-indigo-400 hover:bg-indigo-500 hover:text-white transition-colors duration-150';
+                                copyTextButton.textContent = 'Copy Text';
+                                copyTextButton.onclick = function () {
+                                    navigator.clipboard.writeText(mainContent)
+                                        .then(() => {
+                                            copyTextButton.textContent = 'Copied!';
+                                            setTimeout(() => { copyTextButton.textContent = 'Copy Text'; }, 2000);
+                                        })
+                                        .catch(err => {
+                                            alert('Failed to copy text. Please select and copy manually.');
+                                        });
+                                };
+                                buttonContainer.appendChild(copyTextButton);
+                            }
+                            itemElement.appendChild(buttonContainer);
+                            // --- End Copy Buttons ---
+
                             resultsAreaElement.appendChild(itemElement);
                         });
                     } else if (results.error) {
-                         resultsAreaElement.innerHTML = `<div class="bg-red-500/20 text-red-300 p-4 rounded-lg shadow mb-4">${results.error}</div>`;
+                        resultsAreaElement.innerHTML = `<div class="bg-red-500/20 text-red-300 p-4 rounded-lg shadow mb-4">${results.error}</div>`;
                     } else {
                         resultsAreaElement.innerHTML = `<div class="bg-slate-700 text-slate-400 p-4 rounded-lg shadow mb-4">No content generated. Try adjusting your input!</div>`;
                     }
@@ -365,17 +481,18 @@
         const artisanResultsArea = document.getElementById('artisanResultsArea');
         handleFormSubmit(artisanDescriptionForm, artisanResultsArea, '/generate_artisan_description', 'descriptions');
 
+        // Animation Styles
         const styleSheet = document.createElement("style");
         styleSheet.type = "text/css";
         styleSheet.innerText = `
-            @keyframes fadeIn {
-                from { opacity: 0; transform: translateY(10px); }
-                to { opacity: 1; transform: translateY(0); }
-            }
-            .animate-fadeIn {
-                animation: fadeIn 0.5s ease-out forwards;
-            }
-        `;
+    @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    .animate-fadeIn {
+        animation: fadeIn 0.5s ease-out forwards;
+    }
+`;
         document.head.appendChild(styleSheet);
     </script>
 </body>
