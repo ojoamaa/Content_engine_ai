@@ -12,3 +12,10 @@ __pycache__/
 .idea/
 .vs/
 
+# Database files
+site.db
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal # For SQLite journal files
+instance/    # Ignore the whole instance folder

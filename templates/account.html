@@ -1,0 +1,105 @@
+﻿{% extends "base.html" %}
+{% import "_macros.html" as macros %} {# For rendering forms if we add any later, e.g., profile update #}
+
+{% block title %}My Account - Content Engine AI{% endblock %}
+
+{% block content %}
+<div class="bg-slate-800/80 backdrop-blur-md shadow-xl rounded-xl p-6 md:p-10 w-full max-w-xl mx-auto">
+    <h2 class="text-3xl font-bold text-center text-sky-400 mb-8">My Account</h2>
+
+    {% if current_user.is_authenticated %}
+    <div class="space-y-4 text-slate-200">
+        <div>
+            <h3 class="text-lg font-semibold text-slate-100">Account Details:</h3>
+            <p><strong class="text-slate-400">Email:</strong> {{ current_user.email }}</p>
+            {% if current_user.username %}
+            <p><strong class="text-slate-400">Username:</strong> {{ current_user.username }}</p>
+            {% endif %}
+        </div>
+
+        <hr class="border-slate-700">
+
+        <div>
+            <h3 class="text-lg font-semibold text-slate-100">Subscription Status:</h3>
+            <p>
+                <strong class="text-slate-400">Current Plan:</strong>
+                <span class="font-semibold
+                        {% if current_user.subscription_tier == 'free' %}text-slate-300
+                        {% elif current_user.subscription_tier == 'founder' %}text-yellow-400
+                        {% elif current_user.subscription_tier == 'standard' %}text-sky-400
+                        {% elif current_user.subscription_tier == 'premium' %}text-purple-400
+                        {% endif %}">
+                    {{ current_user.subscription_tier|capitalize }}
+                    {% if current_user.is_founder and current_user.subscription_tier == 'founder' %} (Founder's Pack Active){% endif %}
+                </span>
+            </p>
+            <p><strong class="text-slate-400">Status:</strong> <span class="{{ 'text-green-400' if current_user.subscription_status == 'active' else 'text-red-400' }}">{{ current_user.subscription_status|capitalize }}</span></p>
+
+            {% if current_user.subscription_tier == 'free' %}
+            <p><strong class="text-slate-400">Generations Used:</strong> {{ current_user.free_generations_used }} / {{ current_user.monthly_generations_allowed }} (Free)</p>
+            {% elif current_user.subscription_tier in ['standard', 'premium', 'founder'] %}
+            <p><strong class="text-slate-400">Monthly Generations Used:</strong> {{ current_user.monthly_generations_used }} / {{ current_user.monthly_generations_allowed }}</p>
+            {% if current_user.current_period_end %}
+            <p class="text-sm text-slate-500">
+                {% if current_user.subscription_tier == 'founder' %}
+                Founder's Pack access valid until: {{ current_user.current_period_end.strftime('%B %d, %Y') }}
+                {% else %}
+                Current period ends / Renews on: {{ current_user.current_period_end.strftime('%B %d, %Y') }}
+                {% endif %}
+            </p>
+            {% endif %}
+            {% endif %}
+        </div>
+
+        <hr class="border-slate-700">
+
+        <div>
+            <h3 class="text-lg font-semibold text-slate-100 mb-3">Manage Subscription:</h3>
+            <div class="space-y-3">
+                {# Founder's Pack Offer - Show if available & user is eligible #}
+                {% if founder_packs_available and not current_user.is_founder and current_user.subscription_tier == 'free' %}
+                <div class="p-4 bg-gradient-to-r from-amber-500 via-yellow-500 to-orange-500 rounded-lg text-white text-center">
+                    <h4 class="font-bold">🚀 Limited Founder's Pack! ({{ founder_packs_remaining }} left)</h4>
+                    <p class="text-sm my-1">Get 3 months of Premium access (150 gens/mo) for a one-time ₦1000!</p>
+                    <a href="{{ url_for('subscribe', tier_key='founder') }}"
+                       class="inline-block mt-2 bg-white text-yellow-600 font-semibold py-2 px-4 rounded-lg shadow hover:bg-slate-100 text-sm">
+                        Claim Founder's Pack!
+                    </a>
+                </div>
+                {% elif current_user.is_founder and current_user.subscription_status == 'active' %}
+                <p class="text-yellow-400">You have an active Founder's Pack!</p>
+                {% endif %}
+
+                {# Standard Plan Upgrade/Info #}
+                {% if current_user.subscription_tier == 'free' and not current_user.is_founder %}
+                <a href="{{ url_for('subscribe', tier_key='standard') }}"
+                   class="block w-full text-center bg-sky-500 text-white font-semibold py-2 px-4 rounded-lg hover:bg-sky-600 transition duration-300">
+                    Upgrade to Standard (₦1000/month)
+                </a>
+                {% elif current_user.subscription_tier == 'standard' and current_user.subscription_status == 'active' %}
+                <p class="text-sky-400">You are on the Standard Plan.</p>
+                {% endif %}
+
+                {# Premium Plan Upgrade/Info #}
+                {% if current_user.subscription_tier != 'premium' and not (current_user.is_founder and current_user.subscription_status == 'active') %}
+                <a href="{{ url_for('subscribe', tier_key='premium') }}"
+                   class="block w-full text-center bg-purple-500 text-white font-semibold py-2 px-4 rounded-lg hover:bg-purple-600 transition duration-300">
+                    Upgrade to Premium (₦1500/month)
+                </a>
+                {% elif current_user.subscription_tier == 'premium' and current_user.subscription_status == 'active' and not current_user.is_founder %}
+                <p class="text-purple-400">You are on the Premium Plan.</p>
+                {% endif %}
+
+                {# Link to pricing page for more details #}
+                <p class="text-sm text-center mt-4">
+                    <a href="{{ url_for('pricing') }}" class="text-indigo-400 hover:text-indigo-300">View all plans & details</a>
+                </p>
+                {# TODO V2.1: Add "Cancel Subscription" button and link to Paystack customer portal if applicable #}
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <p class="text-slate-300">Please <a href="{{ url_for('login') }}" class="text-indigo-400 hover:text-indigo-300">log in</a> to view your account details.</p>
+    {% endif %}
+</div>
+{% endblock %}

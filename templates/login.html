@@ -1,0 +1,39 @@
+{# templates/login.html #}
+
+{% extends "base.html" %} {# Extends the base.html template #}
+{% import "_macros.html" as macros %} {# Imports our macros file #}
+
+{% block title %}Login - Content Engine AI{% endblock %}
+
+{% block content %}
+<div class="bg-slate-800/80 backdrop-blur-md shadow-xl rounded-xl p-6 md:p-10 w-full max-w-md mx-auto">
+    <h2 class="text-3xl font-bold text-center text-sky-400 mb-8">Log In to Your Account</h2>
+
+    <form method="POST" action="{{ url_for('login') }}" novalidate class="space-y-6">
+        {{ form.hidden_tag() }} {# CSRF token - important for security with Flask-WTF #}
+
+        {{ macros.render_field(form.email, placeholder_text="your.email@example.com") }}
+        {{ macros.render_field(form.password, placeholder_text="Enter your password") }}
+
+        <div class="flex items-center justify-between">
+            <div>
+                {{ macros.render_field(form.remember) }} {# Renders the 'Remember Me' checkbox #}
+            </div>
+            {# Optional: Add a "Forgot Password?" link here later if implementing password reset #}
+            {# <a href="#" class="text-sm text-indigo-400 hover:text-indigo-300">Forgot password?</a> #}
+        </div>
+
+        <div>
+            {{ macros.render_field(form.submit) }}
+        </div>
+    </form>
+    <div class="mt-6 text-center">
+        <p class="text-sm text-slate-400">
+            Don't have an account? 
+            <a href="{{ url_for('register') }}" class="font-medium text-indigo-400 hover:text-indigo-300">
+                Sign Up
+            </a>
+        </p>
+    </div>
+</div>
+{% endblock %}

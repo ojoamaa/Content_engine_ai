@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Content Engine AI{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                }
+            }
+        }
+    </script>
+    <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" type="image/x-icon">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+
+        .flash-success {
+            background-color: #10b981;
+            color: white;
+            padding: 1rem;
+            border-radius: 0.375rem;
+            margin-bottom: 1rem;
+        }
+
+        .flash-error {
+            background-color: #ef4444;
+            color: white;
+            padding: 1rem;
+            border-radius: 0.375rem;
+            margin-bottom: 1rem;
+        }
+
+        .flash-info {
+            background-color: #3b82f6;
+            color: white;
+            padding: 1rem;
+            border-radius: 0.375rem;
+            margin-bottom: 1rem;
+        }
+
+        .tab-button {
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+
+            .tab-button.active {
+                background-color: #4f46e5;
+                color: white;
+                border-bottom: 2px solid #818cf8;
+            }
+
+            .tab-button:not(.active) {
+                background-color: #374151;
+                color: #9ca3af;
+            }
+
+                .tab-button:not(.active):hover {
+                    background-color: #4b5563;
+                    color: #d1d5db;
+                }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .animate-fadeIn {
+            animation: fadeIn 0.5s ease-out forwards;
+        }
+    </style>
+    {% block head_extra %}{% endblock %}
+</head>
+<body class="bg-gradient-to-br from-slate-900 to-slate-800 text-slate-100 min-h-screen flex flex-col selection:bg-indigo-500 selection:text-white">
+
+    <nav class="bg-slate-800 shadow-md w-full sticky top-0 z-50">
+        <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center">
+                    <a href="{{ url_for('index') }}" class="text-2xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 via-pink-500 to-red-500">
+                        Content Engine AI
+                    </a>
+                </div>
+                <div class="flex items-center space-x-2 md:space-x-4">
+                    {# Add other general nav links here if needed, e.g., Home, Pricing #}
+                    <a href="{{ url_for('index') }}" class="text-slate-300 hover:bg-slate-700 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Home</a>
+                    <a href="{{ url_for('pricing') }}" class="text-slate-300 hover:bg-slate-700 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Pricing</a>
+
+                    {% if current_user.is_authenticated %}
+                    <a href="{{ url_for('account') }}" class="text-slate-300 hover:bg-slate-700 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Account</a>
+                    <a href="{{ url_for('logout') }}" class="text-slate-300 hover:bg-slate-700 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Logout</a>
+                    {% else %}
+                    <a href="{{ url_for('login') }}" class="text-slate-300 hover:bg-slate-700 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Login</a>
+                    <a href="{{ url_for('register') }}" class="text-slate-300 hover:bg-slate-700 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Sign Up</a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <main class="flex-grow container mx-auto mt-8 mb-8 px-4 sm:px-6 lg:px-8 w-full max-w-2xl">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        {% for category, message in messages %}
+        <div class="flash-{{ category|lower }}">
+            {{ message }}
+        </div>
+        {% endfor %}
+        {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="bg-slate-800 text-center py-4 w-full mt-auto">
+        <p class="text-sm text-slate-400">&copy; {% if now %}{{ now.year }}{% else %}2025{% endif %} Content Engine AI. All rights reserved.</p>
+    </footer>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>

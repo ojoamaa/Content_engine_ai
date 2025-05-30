@@ -1,0 +1,33 @@
+{# templates/_macros.html #}
+
+{# Macro to render a single form field with label, input, and errors #}
+{% macro render_field(field, placeholder_text="") %}
+    <div class="mb-4">
+        {{ field.label(class="block text-sm font-medium text-slate-300 mb-1") }}
+        
+        {% if field.type == 'StringField' or field.type == 'EmailField' %}
+            {{ field(class="w-full p-3 bg-slate-700 border border-slate-600 rounded-lg text-slate-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition duration-150", placeholder=placeholder_text) }}
+        {% elif field.type == 'PasswordField' %}
+            {{ field(class="w-full p-3 bg-slate-700 border border-slate-600 rounded-lg text-slate-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition duration-150", placeholder=placeholder_text) }}
+        {% elif field.type == 'BooleanField' %}
+            <div class="flex items-center">
+                {{ field(class="h-4 w-4 text-indigo-600 border-slate-500 rounded focus:ring-indigo-500") }}
+                {{ field.label(class="ml-2 block text-sm text-slate-300") }}
+            </div>
+        {% elif field.type == 'SubmitField' %}
+            {{ field(class="w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-800 focus:ring-indigo-500 transition duration-150 ease-in-out") }}
+        {% else %}
+            {# Default rendering for other field types if needed #}
+            {{ field(class="w-full p-3 bg-slate-700 border border-slate-600 rounded-lg text-slate-100 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition duration-150") }}
+        {% endif %}
+
+        {% if field.errors %}
+            <ul class="mt-1 text-xs text-red-400">
+                {% for error in field.errors %}
+                    <li>{{ error }}</li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+    </div>
+{% endmacro %}
+

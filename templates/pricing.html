@@ -1,0 +1,110 @@
+﻿{% extends "base.html" %}
+{% import "_macros.html" as macros %} {# Assuming you might use form macros later, or remove if not needed for this page #}
+
+{% block title %}Pricing Plans - Content Engine AI{% endblock %}
+
+{% block content %}
+<div class="bg-slate-800/80 backdrop-blur-md shadow-xl rounded-xl p-6 md:p-10 w-full max-w-3xl mx-auto">
+    <h2 class="text-3xl font-bold text-center text-sky-400 mb-10">Choose Your Plan</h2>
+
+    <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6 items-stretch">
+
+        {# The founder_packs_available and founder_packs_remaining come from the context_processor in app.py #}
+        {% if founder_packs_available and (not current_user.is_authenticated or (current_user.is_authenticated and not current_user.is_founder and current_user.subscription_tier == 'free')) %}
+        <div class="flex flex-col p-6 bg-gradient-to-r from-amber-500 via-yellow-500 to-orange-500 rounded-lg shadow-lg text-white ring-2 ring-yellow-300 order-first lg:col-span-1 md:col-span-2">
+            <h3 class="text-2xl font-bold mb-2">🚀 Founder's Pack</h3>
+            <p class="text-yellow-100 mb-1 text-sm">Limited Offer! (Only {{ founder_packs_remaining }} left)</p>
+            <p class="mb-4 flex-grow text-sm">
+                Get **Premium Level Access** (150 generations/month, both tools) for **3 Months**!
+            </p>
+            <p class="text-4xl font-extrabold my-2">
+                ₦1000 <span class="text-base font-normal">(One-Time)</span>
+            </p>
+            {% if current_user.is_authenticated %}
+                <a href="{{ url_for('subscribe', tier_key='founder') }}"
+                   class="block w-full mt-auto bg-white text-yellow-600 font-bold py-3 px-6 rounded-lg shadow-md hover:bg-slate-100 transition duration-300 text-lg text-center">
+                    Claim Founder's Pack!
+
+            <a href="{{ url_for('subscribe', tier_key='standard') }}" ...>Subscribe to Standard</a>   
+            <a href="{{ url_for('subscribe', tier_key='premium') }}" ...>Subscribe to Premium</a>
+                
+                </a>
+            {% else %}
+                <a href="{{ url_for('login', next=url_for('pricing')) }}"
+                   class="block w-full mt-auto bg-white text-yellow-600 font-bold py-3 px-6 rounded-lg shadow-md hover:bg-slate-100 transition duration-300 text-lg text-center">
+                    Login/Sign Up to Claim!
+                </a>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        <div class="flex flex-col p-6 bg-slate-700 rounded-lg shadow ring-1 ring-slate-600">
+            <h3 class="text-xl font-semibold text-sky-400 mb-2">Standard Plan</h3>
+            <p class="text-slate-400 mb-3 text-sm flex-grow">Perfect for focused Local Biz content.</p>
+            <p class="text-3xl font-bold text-slate-100 mb-3">₦1000 <span class="text-sm font-normal text-slate-400">/month</span></p>
+            <ul class="list-disc list-inside text-slate-300 space-y-1 mb-6 text-sm">
+                <li><strong>50</strong> Generations per month</li>
+                <li>Access to Local Biz Social Media Assistant</li>
+                <li>Target Audience Input</li>
+                <li>Visual Suggestions</li>
+            </ul>
+            {% if current_user.is_authenticated %}
+                {% if current_user.subscription_tier == 'standard' and current_user.subscription_status == 'active' %}
+                    <p class="mt-auto text-center text-green-400 font-semibold py-2 px-4 rounded-lg border border-green-400">Your Current Plan</p>
+                {% elif current_user.subscription_tier == 'premium' or (current_user.is_founder and current_user.subscription_status == 'active') %}
+                     <p class="mt-auto text-center text-slate-400 font-semibold py-2 px-4 rounded-lg border border-slate-600">Covered by Higher Plan</p>
+                {% else %} {# User is free or on an inactive/different plan #}
+                     <a href="{{ url_for('subscribe', tier_key='standard') }}"
+                       class="block w-full mt-auto text-center bg-sky-500 text-white font-semibold py-2 px-4 rounded-lg hover:bg-sky-600 transition duration-300">
+                        Subscribe to Standard
+                    </a>
+                {% endif %}
+            {% else %}
+                <a href="{{ url_for('login', next=url_for('pricing')) }}"
+                   class="block w-full mt-auto text-center bg-sky-500 text-white font-semibold py-2 px-4 rounded-lg hover:bg-sky-600 transition duration-300">
+                    Login/Sign Up
+                </a>
+            {% endif %}
+        </div>
+
+        <div class="flex flex-col p-6 bg-slate-700 rounded-lg shadow ring-1 ring-slate-600">
+            <h3 class="text-xl font-semibold text-purple-400 mb-2">Premium Plan</h3>
+            <p class="text-slate-400 mb-3 text-sm flex-grow">Full access for all your content needs.</p>
+            <p class="text-3xl font-bold text-slate-100 mb-3">₦1500 <span class="text-sm font-normal text-slate-400">/month</span></p>
+            <ul class="list-disc list-inside text-slate-300 space-y-1 mb-6 text-sm">
+                <li><strong>150</strong> Generations per month</li>
+                <li>Access to Local Biz Social Media Assistant</li>
+                <li>Access to Artisan & Handmade Seller Storyteller</li>
+                <li>Target Audience Input</li>
+                <li>Visual Suggestions</li>
+            </ul>
+             {% if current_user.is_authenticated %}
+                {% if current_user.subscription_tier == 'premium' and current_user.subscription_status == 'active' and not current_user.is_founder %}
+                    <p class="mt-auto text-center text-green-400 font-semibold py-2 px-4 rounded-lg border border-green-400">Your Current Plan</p>
+                {% elif current_user.is_founder and current_user.subscription_status == 'active' %}
+                     <p class="mt-auto text-center text-yellow-400 font-semibold py-2 px-4 rounded-lg border border-yellow-400">Founder's Pack Active</p>
+                {% elif current_user.subscription_tier != 'premium' %}
+                    <a href="{{ url_for('subscribe', tier_key='premium') }}"
+                       class="block w-full mt-auto text-center bg-purple-500 text-white font-semibold py-2 px-4 rounded-lg hover:bg-purple-600 transition duration-300">
+                        Subscribe to Premium
+                    </a>
+                {% endif %}
+            {% else %}
+                 <a href="{{ url_for('login', next=url_for('pricing')) }}"
+                   class="block w-full mt-auto text-center bg-purple-500 text-white font-semibold py-2 px-4 rounded-lg hover:bg-purple-600 transition duration-300">
+                    Login/Sign Up
+                </a>
+            {% endif %}
+        </div>
+
+    </div>
+    <div class="text-center mt-6 mb-8">
+        <p class="text-sm text-slate-400">
+            New here? Freemium plan includes 10 free generations total to try both tools.
+            <a href="{{ url_for('register') if not current_user.is_authenticated else url_for('index') }}" class="font-medium text-indigo-400 hover:text-indigo-300">
+                {{ "Sign Up to Get Started!" if not current_user.is_authenticated else "Go to App" }}
+            </a>
+        </p>
+    </div>
+</div>
+{% endblock %}

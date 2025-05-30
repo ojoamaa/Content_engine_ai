@@ -1,232 +1,499 @@
 ﻿import os
 import json
 import re 
-from flask import Flask, render_template, request, jsonify
+import datetime
+import hashlib # NEW: For webhook signature verification
+import hmac    # NEW: For webhook signature verification
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, abort # NEW: Added abort
 from dotenv import load_dotenv
 import google.generativeai as genai
+import requests 
+
+from flask_sqlalchemy import SQLAlchemy
+from flask_migrate import Migrate
+from flask_login import LoginManager, UserMixin, login_user, logout_user, current_user, login_required
+from werkzeug.security import generate_password_hash, check_password_hash
+
+from forms import RegistrationForm, LoginForm 
 
 load_dotenv()
 app = Flask(__name__)
 
+app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY') or 'v2_webhook_secret_CHANGE_ME_PLEASE' 
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL') or 'sqlite:///site.db' 
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['PAYSTACK_SECRET_KEY'] = os.environ.get('PAYSTACK_SECRET_KEY') 
+
+FOUNDER_PACKS_CLAIMED = 0 
+MAX_FOUNDER_PACKS = 20
+
+db = SQLAlchemy(app)
+migrate = Migrate(app, db)
+login_manager = LoginManager(app)
+login_manager.login_view = 'login' 
+login_manager.login_message_category = 'info'
+login_manager.login_message = "Please log in to access this page."
+
+class User(db.Model, UserMixin):
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(128), nullable=False) 
+    username = db.Column(db.String(80), unique=True, nullable=True) 
+    created_at = db.Column(db.DateTime, default=lambda: datetime.datetime.now(datetime.UTC))
+    subscription_tier = db.Column(db.String(50), default='free', nullable=False) 
+    subscription_status = db.Column(db.String(50), default='active', nullable=False) 
+    paystack_customer_code = db.Column(db.String(100), nullable=True)
+    paystack_subscription_code = db.Column(db.String(100), nullable=True)
+    free_generations_used = db.Column(db.Integer, default=0, nullable=False)
+    monthly_generations_allowed = db.Column(db.Integer, default=10, nullable=False) 
+    monthly_generations_used = db.Column(db.Integer, default=0, nullable=False)
+    current_period_end = db.Column(db.DateTime, nullable=True)
+    is_founder = db.Column(db.Boolean, default=False, nullable=False)
+
+    def __repr__(self): return f"User('{self.email}', Tier: '{self.subscription_tier}')"
+    def set_password(self, password): self.password_hash = generate_password_hash(password)
+    def check_password(self, password): return check_password_hash(self.password_hash, password)
+
+@login_manager.user_loader
+def load_user(user_id): return db.session.get(User, int(user_id))
+
+@app.context_processor
+def inject_now(): return {'now': datetime.datetime.now(datetime.UTC)}
+
+@app.context_processor 
+def inject_founder_pack_status():
+    global FOUNDER_PACKS_CLAIMED, MAX_FOUNDER_PACKS
+    # For production, consider fetching this count from the DB:
+    # actual_claimed_count = User.query.filter_by(is_founder=True).count()
+    # founder_packs_available = actual_claimed_count < MAX_FOUNDER_PACKS
+    # founder_packs_remaining = MAX_FOUNDER_PACKS - actual_claimed_count
+    return dict(
+        founder_packs_available=(FOUNDER_PACKS_CLAIMED < MAX_FOUNDER_PACKS),
+        founder_packs_remaining=(MAX_FOUNDER_PACKS - FOUNDER_PACKS_CLAIMED)
+    )
+
 try:
     gemini_api_key = os.getenv("GEMINI_API_KEY")
-    if not gemini_api_key:
-        raise ValueError("GEMINI_API_KEY not found in .env file or environment variables.")
+    if not gemini_api_key: print("Warning: GEMINI_API_KEY not found.")
     genai.configure(api_key=gemini_api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash-latest')
+    gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
 except Exception as e:
     print(f"Error configuring Gemini API: {e}")
-    model = None
+    gemini_model = None
 
-# --- Prompt construction functions (construct_local_biz_caption_prompt and construct_artisan_description_prompt) ---
-# These remain the same as in content_engine_flask_app_08.
-# The AI is still instructed to provide a Visual Suggestion on a new line
-# and separate full variations with triple newlines.
-# For brevity, I am not repeating them here, but assume they are the same as the previous version.
-# Ensure your local app.py has these functions as they were in content_engine_flask_app_08.
-
+# --- Prompt Construction & Parsing Functions (Assumed latest correct versions) ---
 def construct_local_biz_caption_prompt(data):
-    business_name = data.get('businessName') or "Our business"
-    business_type = data.get('businessType', 'local business')
-    post_type = data.get('postType', 'general announcement').replace('_', ' ')
-    key_message = data.get('keyMessage', 'something exciting!')
-    target_audience = data.get('targetAudience')
-    tone = data.get('tone', 'friendly & casual').replace('_', ' ')
-    call_to_action = data.get('callToAction', 'no specific cta')
-    include_emojis = data.get('includeEmojis') == 'on'
-    num_variations = int(data.get('numVariations', 3))
-
-    prompt_lines = [
-        f"You are an expert social media manager specializing in engaging content for diverse local businesses.",
-        f"Generate {num_variations} distinct social media caption variations.",
-        f"The business type is: '{business_type}'.",
-        f"The desired tone for the caption(s) is '{tone}'.",
-        f"The purpose of the post is: '{post_type}'.",
-        f"Key message/details to include: '{key_message}'.",
+    # ... (Code from content_engine_flask_app_v2_09_founder_pack) ...
+    business_name = data.get('businessName') or "Our business"; business_type = data.get('businessType', 'local business')
+    post_type = data.get('postType', 'general announcement').replace('_', ' '); key_message = data.get('keyMessage', 'something exciting!')
+    target_audience = data.get('targetAudience'); tone = data.get('tone', 'friendly & casual').replace('_', ' ')
+    call_to_action = data.get('callToAction', 'no specific cta'); include_emojis = data.get('includeEmojis') == 'on'
+    num_variations = int(data.get('numVariations', 3)); prompt_lines = [
+        f"You are an expert social media manager.", f"Generate {num_variations} distinct social media caption variations.",
+        f"The business type is: '{business_type}'.", f"The desired tone for the caption(s) is '{tone}'.",
+        f"The purpose of the post is: '{post_type}'.", f"Key message/details to include: '{key_message}'.",
     ]
-    if business_name != "Our business":
-        prompt_lines.append(f"The business name is '{business_name}'.")
-    if target_audience:
-        prompt_lines.append(f"The primary target audience for this post is: '{target_audience}'. Tailor the language and appeal accordingly.")
+    if business_name != "Our business": prompt_lines.append(f"The business name is '{business_name}'.")
+    if target_audience: prompt_lines.append(f"The primary target audience: '{target_audience}'. Tailor language accordingly.")
     if call_to_action != "no specific cta" and call_to_action != "custom_cta":
         cta_text_map = {"visit_us": "Visit Us Today!", "shop_now_online": "Shop Now/Order Online!", "book_appointment_now": "Book Your Appointment Now!", "learn_more": "Learn More (link in bio/DM us)!", "tag_friend": "Tag a Friend Who Needs This!", "contact_us": "Contact Us for Details!"}
         cta_text = cta_text_map.get(call_to_action, call_to_action.replace('_', ' ').title() + "!")
         prompt_lines.append(f"Include a call to action like: '{cta_text}'.")
-    elif call_to_action == "custom_cta":
-        prompt_lines.append("The user wants a custom call to action, infer it from the key message or make a general one if not clear.")
-    if include_emojis: prompt_lines.append("Please include relevant emojis.")
-    else: prompt_lines.append("Do not use any emojis.")
+    elif call_to_action == "custom_cta": prompt_lines.append("Infer a custom call to action from the key message.")
+    if include_emojis: prompt_lines.append("Include relevant emojis.")
+    else: prompt_lines.append("Do not use emojis.")
     prompt_lines.extend([
-        "Instructions for the AI:",
-        f"- Tailor each caption variation specifically to the nature of a '{business_type}' and its target audience if specified.",
-        "- Each caption variation should be a complete thought.",
-        "- After each complete caption variation, on a new line, add a brief suggestion for a suitable visual starting exactly with 'Visual Suggestion:'.",
-        "- Ensure each complete variation (main caption text followed by its single 'Visual Suggestion:' line) is clearly separated from the next complete variation by a TRIPLE newline (two blank lines).",
-        "- Focus solely on generating the caption text and the visual suggestion. Do not add any other introductory or concluding remarks, or labels like 'Caption 1:'."
+        "Instructions for the AI:", f"- Tailor each caption specifically to a '{business_type}' and its target audience.",
+        "- Each caption must be a complete thought.", "- After each caption, on a new line, add 'Visual Suggestion:'.",
+        "- Ensure each complete variation (caption + Visual Suggestion) is separated by a TRIPLE newline (two blank lines).",
+        "- No introductory/concluding remarks or labels like 'Caption 1:'."
     ])
     return "\n".join(prompt_lines)
 
 def construct_artisan_description_prompt(data):
-    creator_name = data.get('creatorName')
-    product_name = data.get('productName', 'this unique item')
-    product_category = data.get('productCategory', 'handmade product')
-    key_materials = data.get('keyMaterials', 'quality materials')
-    creation_process = data.get('creationProcess')
-    inspiration = data.get('inspiration')
-    unique_selling_points = data.get('uniqueSellingPoints', 'it is special')
-    target_audience = data.get('targetAudience')
-    artisan_tone = data.get('artisanTone', 'story_driven_evocative').replace('_', ' ')
-    num_variations = int(data.get('numVariations', 2))
+    # ... (Code from content_engine_flask_app_v2_09_founder_pack) ...
+    creator_name = data.get('creatorName'); product_name = data.get('productName', 'this unique item')
+    product_category = data.get('productCategory', 'handmade product'); key_materials = data.get('keyMaterials', 'quality materials')
+    creation_process = data.get('creationProcess'); inspiration = data.get('inspiration')
+    unique_selling_points = data.get('uniqueSellingPoints', 'it is special'); target_audience = data.get('targetAudience')
+    artisan_tone = data.get('artisanTone', 'story_driven_evocative').replace('_', ' '); num_variations = int(data.get('numVariations', 2))
     prompt_lines = [
-        f"You are an expert copywriter specializing in crafting compelling and unique product descriptions for artisans and handmade sellers.",
-        f"Generate {num_variations} distinct product description variations.",
-        f"The product is: '{product_name}', a type of '{product_category}'.",
-        f"It is made primarily from: '{key_materials}'.",
-        f"The desired tone for the description(s) is '{artisan_tone}'.",
-        f"Key unique selling points and customer benefits are: '{unique_selling_points}'.",
+        f"You are an expert copywriter for artisans.", f"Generate {num_variations} distinct product description variations.",
+        f"Product: '{product_name}', Type: '{product_category}'.", f"Materials: '{key_materials}'.",
+        f"Tone: '{artisan_tone}'.", f"USPs/Benefits: '{unique_selling_points}'.",
     ]
-    if creator_name: prompt_lines.append(f"The creator/brand name is '{creator_name}'.")
-    if creation_process: prompt_lines.append(f"Highlights of the creation process/technique: '{creation_process}'.")
-    if inspiration: prompt_lines.append(f"The inspiration or story behind the product is: '{inspiration}'.")
-    if target_audience: prompt_lines.append(f"The primary target audience for this product is: '{target_audience}'. Emphasize aspects that would appeal to them.")
+    if creator_name: prompt_lines.append(f"Creator: '{creator_name}'.")
+    if creation_process: prompt_lines.append(f"Process: '{creation_process}'.")
+    if inspiration: prompt_lines.append(f"Inspiration: '{inspiration}'.")
+    if target_audience: prompt_lines.append(f"Target audience: '{target_audience}'. Emphasize appeal to them.")
     prompt_lines.extend([
-        "Instructions for the AI:",
-        f"- Write each description variation to be evocative and highlight the uniqueness of a handmade '{product_category}', keeping the target audience in mind if specified.",
-        "- Each description should be well-structured (e.g., 1-2 paragraphs).",
-        "- After each complete product description variation, on a new line, add a brief suggestion for a suitable primary product image starting exactly with 'Visual Suggestion:'.",
-        "- Ensure each complete variation (description + its single 'Visual Suggestion:' line) is clearly separated from the next complete variation by a TRIPLE newline (two blank lines).",
-        "- Focus solely on generating the product description text and the visual suggestion. Do not add any other introductory or concluding remarks, or labels like 'Description 1:'."
+        "Instructions for AI:", f"- Write evocative descriptions for a handmade '{product_category}', considering target audience.",
+        "- Emphasize craftsmanship, materials, story/inspiration.", "- Suitable for online shop. 1-2 paragraphs each.",
+        "- After each description, on a new line, add 'Visual Suggestion:'.",
+        "- Ensure each complete variation (description + Visual Suggestion) is separated by a TRIPLE newline (two blank lines).",
+        "- No introductory/concluding remarks or labels."
     ])
     return "\n".join(prompt_lines)
 
-# --- NEW/IMPROVED Parsing Function ---
 def parse_ai_response_into_blocks(generated_text, num_variations_requested):
-    """
-    Parses the AI's generated text into the requested number of blocks.
-    Each block should contain a main content piece and its visual suggestion.
-    This version iterates through lines to group them more robustly.
-    """
-    if not generated_text:
-        return []
+    # ... (Code from content_engine_flask_app_v2_09_founder_pack) ...
+    if not generated_text: return []
+    lines = [line.strip() for line in generated_text.splitlines()]
+    all_complete_variations = []; current_variation_lines = []
+    for line_text in lines:
+        cleaned_line = line_text.strip()
+        if not cleaned_line: continue
+        current_variation_lines.append(cleaned_line)
+        if cleaned_line.startswith("Visual Suggestion:"):
+            if current_variation_lines:
+                all_complete_variations.append("\n".join(current_variation_lines))
+                current_variation_lines = [] 
+                if len(all_complete_variations) == num_variations_requested: break
+    if current_variation_lines and len(all_complete_variations) < num_variations_requested:
+        all_complete_variations.append("\n".join(current_variation_lines))
+    return all_complete_variations[:num_variations_requested] if len(all_complete_variations) > num_variations_requested else all_complete_variations
+# --- End Prompt/Parsing ---
 
-    lines = [line.strip() for line in generated_text.splitlines()] # Use splitlines() for universal newlines
-    
-    all_variations = []
-    current_variation_lines = []
-    for line in lines:
-        if not line: # Skip empty lines that might be used as separators
-            # If we have content in current_variation_lines AND it doesn't have a VS yet,
-            # AND a blank line appears, it *might* be a separator.
-            # However, our main logic relies on finding "Visual Suggestion:" to complete a block.
-            # If the AI uses blank lines to separate and current_variation_lines has text,
-            # it implies the AI might not have added a VS for the previous block.
-            # This is tricky. Let's assume "Visual Suggestion:" is the primary delimiter for now.
-            continue 
-
-        current_variation_lines.append(line)
-        if line.startswith("Visual Suggestion:"):
-            # This line is a visual suggestion, it completes the current variation block
-            if current_variation_lines: # Should always be true if VS is found
-                all_variations.append("\n".join(current_variation_lines))
-                current_variation_lines = [] # Reset for the next variation
-                if len(all_variations) == num_variations_requested:
-                    break 
-        # If it's not a "Visual Suggestion:" line, it's part of the main content of the current variation.
-        # We just keep appending to current_variation_lines.
-        # The block completes when its "Visual Suggestion:" line is found and processed.
-    
-    # In case the last variation didn't have a Visual Suggestion or the loop ended
-    # before processing a final Visual Suggestion line that was collected.
-    if current_variation_lines and len(all_variations) < num_variations_requested:
-        all_variations.append("\n".join(current_variation_lines))
-
-    # Ensure we only return up to the requested number, even if parsing found more (unlikely with current logic)
-    if len(all_variations) > num_variations_requested:
-        return all_variations[:num_variations_requested]
-        
-    return all_variations
-
-
+# --- Auth & Main Routes (from content_engine_flask_app_v2_09_founder_pack) ---
 @app.route('/')
-def index():
-    return render_template('index.html')
+def index(): return render_template('index.html', title="Home")
+@app.route('/register', methods=['GET', 'POST'])
+# ... (Full registration logic) ...
+def register():
+    if current_user.is_authenticated: return redirect(url_for('index')) 
+    form = RegistrationForm()
+    if form.validate_on_submit(): 
+        existing_user_email = User.query.filter_by(email=form.email.data).first()
+        if existing_user_email:
+            flash('That email address is already registered. Please log in.', 'danger'); return redirect(url_for('register')) 
+        if form.username.data: 
+            existing_user_username = User.query.filter_by(username=form.username.data).first()
+            if existing_user_username:
+                flash('That username is already taken. Please choose a different one.', 'danger'); return redirect(url_for('register'))
+        hashed_password = generate_password_hash(form.password.data)
+        user = User(email=form.email.data, username=form.username.data or None, password_hash=hashed_password)
+        user.subscription_tier = 'free'; user.monthly_generations_allowed = 10; user.free_generations_used = 0
+        db.session.add(user); db.session.commit()
+        flash('Your account has been created! You can now log in.', 'success'); return redirect(url_for('login'))
+    return render_template('register.html', title='Register', form=form)
 
-@app.route('/generate_local_biz_captions', methods=['POST'])
-def generate_local_biz_captions():
-    if not model: return jsonify({"error": "Gemini API model not configured."}), 500
+@app.route('/login', methods=['GET', 'POST'])
+# ... (Full login logic) ...
+def login():
+    if current_user.is_authenticated: return redirect(url_for('index'))
+    form = LoginForm()
+    if form.validate_on_submit():
+        user = User.query.filter_by(email=form.email.data).first()
+        if user and user.check_password(form.password.data):
+            login_user(user, remember=form.remember.data); flash('Login successful!', 'success')
+            next_page = request.args.get('next'); return redirect(next_page) if next_page else redirect(url_for('index'))
+        else: flash('Login Unsuccessful. Please check email and password.', 'danger')
+    return render_template('login.html', title='Login', form=form)
+
+@app.route('/logout')
+@login_required 
+def logout(): logout_user(); flash('You have been logged out.', 'info'); return redirect(url_for('index'))
+@app.route('/account')
+@login_required
+def account(): return render_template('account.html', title='My Account') 
+@app.route('/pricing') 
+def pricing(): return render_template('pricing.html', title='Pricing') 
+# --- End Auth Routes ---
+
+# --- Paystack Integration Routes (from content_engine_flask_app_v2_09_founder_pack) ---
+PAYSTACK_BASE_URL = 'https://api.paystack.co'
+PAYSTACK_PLAN_CODES = {
+    "standard": os.environ.get("PAYSTACK_STANDARD_PLAN_CODE", "PLN_9szuvkfwec6fq96"), 
+    "premium": os.environ.get("PAYSTACK_PREMIUM_PLAN_CODE", "PLN_49wey3rviyo6bp8"),
+    "founder": os.environ.get("PAYSTACK_FOUNDER_PACK_CODE", "PLN_lxwft3ddtlakbd6")
+}
+TIER_DETAILS = {
+    "founder": {"name": "Founder's Pack", "generations": 150, "tools": ["local_biz", "artisan"], "duration_days": 90, "price_kobo": 100000, "is_recurring": True},
+    "standard": {"name": "Standard", "generations": 50, "tools": ["local_biz"], "price_kobo": 100000, "is_recurring": True},
+    "premium": {"name": "Premium", "generations": 150, "tools": ["local_biz", "artisan"], "price_kobo": 150000, "is_recurring": True}
+}
+
+@app.route('/subscribe/<tier_key>')
+# ... (Full subscribe logic from _v2_09) ...
+@login_required
+def subscribe(tier_key):
+    global FOUNDER_PACKS_CLAIMED, MAX_FOUNDER_PACKS 
+    if tier_key not in TIER_DETAILS:
+        flash("Invalid subscription plan selected.", "danger"); return redirect(url_for('pricing'))
+    tier_info = TIER_DETAILS[tier_key]
+    if tier_key == "founder":
+        if current_user.is_founder or current_user.subscription_tier == 'founder':
+            flash("You have already claimed or have an active Founder's Pack.", "info"); return redirect(url_for('account'))
+        if FOUNDER_PACKS_CLAIMED >= MAX_FOUNDER_PACKS:
+            flash("Sorry, all Founder's Packs have been claimed.", "info"); return redirect(url_for('pricing'))
+    if tier_key == "standard" and (current_user.subscription_tier == 'standard' or current_user.subscription_tier == 'premium' or current_user.subscription_tier == 'founder') and current_user.subscription_status == 'active':
+        flash(f"You are already on the {current_user.subscription_tier} plan or higher.", "info"); return redirect(url_for('account'))
+    if tier_key == "premium" and (current_user.subscription_tier == 'premium' or current_user.subscription_tier == 'founder') and current_user.subscription_status == 'active':
+        flash(f"You are already on the {current_user.subscription_tier} plan or higher.", "info"); return redirect(url_for('account'))
+    headers = {"Authorization": f"Bearer {app.config['PAYSTACK_SECRET_KEY']}", "Content-Type": "application/json"}
+    callback_url = url_for('paystack_callback', _external=True)
+    reference = f"user{current_user.id}_{tier_key}_{int(datetime.datetime.now().timestamp())}"
+    payload = {
+        "email": current_user.email, "amount": tier_info["price_kobo"], 
+        "callback_url": callback_url, "reference": reference,
+        "metadata": {
+            "user_id": current_user.id, "tier_key": tier_key,
+            "plan_code_used": PAYSTACK_PLAN_CODES.get(tier_key),
+            "custom_fields": [
+                {"display_name": "User ID", "variable_name": "user_id", "value": str(current_user.id)},
+                {"display_name": "Selected Plan", "variable_name": "selected_plan", "value": tier_info["name"]}
+            ]
+        }
+    }
+    if tier_info["is_recurring"] and PAYSTACK_PLAN_CODES.get(tier_key): payload['plan'] = PAYSTACK_PLAN_CODES[tier_key]
+    if current_user.paystack_customer_code: payload['customer'] = current_user.paystack_customer_code
     try:
-        data = request.get_json()
-        if not data: return jsonify({"error": "No data provided."}), 400
+        print(f"Initializing Paystack transaction: {payload}")
+        response = requests.post(f"{PAYSTACK_BASE_URL}/transaction/initialize", headers=headers, json=payload)
+        response.raise_for_status() 
+        paystack_response = response.json()
+        if paystack_response.get("status"):
+            print(f"Redirecting to Paystack: {paystack_response['data']['authorization_url']}")
+            return redirect(paystack_response["data"]["authorization_url"])
+        else:
+            flash(f"Paystack: {paystack_response.get('message', 'Error')}", "danger"); print(f"Paystack Init Error: {paystack_response.get('message')}")
+            return redirect(url_for('account'))
+    except Exception as e:
+        flash(f"Payment gateway error. Try again.", "danger"); print(f"Paystack Error: {e}")
+        return redirect(url_for('account'))
+
+@app.route('/paystack_callback')
+# ... (Full callback logic from _v2_09) ...
+@login_required 
+def paystack_callback():
+    reference = request.args.get('trxref') or request.args.get('reference')
+    if not reference: flash("Payment reference missing.", "danger"); return redirect(url_for('index')) 
+    headers = { "Authorization": f"Bearer {app.config['PAYSTACK_SECRET_KEY']}" }
+    try:
+        print(f"Verifying Paystack transaction: {reference}")
+        response = requests.get(f"{PAYSTACK_BASE_URL}/transaction/verify/{reference}", headers=headers)
+        response.raise_for_status(); verification_data = response.json()
+        print(f"Paystack Verification Data: {verification_data}")
+        if verification_data.get("status") and verification_data["data"]["status"] == "success":
+            payment_data = verification_data["data"]; customer_data = payment_data.get("customer", {})
+            metadata = payment_data.get("metadata", {}); user_id_from_meta = metadata.get("user_id") if metadata else None
+            if not user_id_from_meta or str(current_user.id) != str(user_id_from_meta):
+                flash("Payment verification user mismatch.", "danger"); return redirect(url_for('index'))
+            tier_key = metadata.get("tier_key")
+            if tier_key and tier_key in TIER_DETAILS:
+                tier_info = TIER_DETAILS[tier_key]
+                current_user.subscription_tier = tier_key; current_user.subscription_status = 'active'
+                current_user.paystack_customer_code = customer_data.get("customer_code", current_user.paystack_customer_code)
+                current_user.monthly_generations_allowed = tier_info["generations"]
+                current_user.monthly_generations_used = 0; current_user.free_generations_used = 10 
+                if tier_key == "founder":
+                    global FOUNDER_PACKS_CLAIMED, MAX_FOUNDER_PACKS 
+                    if FOUNDER_PACKS_CLAIMED < MAX_FOUNDER_PACKS and not current_user.is_founder:
+                        current_user.is_founder = True
+                        current_user.current_period_end = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=tier_info["duration_days"])
+                        FOUNDER_PACKS_CLAIMED += 1 
+                        print(f"Founder pack successfully applied for user {current_user.email}. Count: {FOUNDER_PACKS_CLAIMED}")
+                    else: 
+                        flash("Founder pack could not be applied (limit or already claimed). Contact support if this is an error.", "warning")
+                        return redirect(url_for('account'))
+                else: 
+                    current_user.is_founder = False 
+                    current_user.paystack_subscription_code = payment_data.get("subscription", {}).get("subscription_code") or \
+                                                             payment_data.get("plan_object", {}).get("subscription_code", current_user.paystack_subscription_code)
+                    current_user.current_period_end = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=30) 
+                db.session.commit()
+                flash(f"Your {tier_info['name']} access has been activated!", "success")
+            else: flash("Subscription plan details unclear after payment. Contact support.", "warning")
+            return redirect(url_for('account'))
+        else:
+            flash(f"Paystack payment verification failed: {verification_data.get('message', 'Error')}", "danger")
+            return redirect(url_for('account'))
+    except Exception as e:
+        flash(f"Payment verification error. Contact support.", "danger"); print(f"Paystack Callback Error: {e}")
+        return redirect(url_for('account'))
+
+# --- NEW/UPDATED: Paystack Webhook Handler ---
+@app.route('/paystack_webhook', methods=['POST'])
+def paystack_webhook():
+    # 1. Verify the webhook signature (CRITICAL for security)
+    paystack_secret = app.config['PAYSTACK_SECRET_KEY']
+    signature = request.headers.get('X-Paystack-Signature')
+    payload_body = request.data # Raw request body as bytes
+
+    if not signature or not paystack_secret:
+        print("Webhook Error: Missing signature or secret key.")
+        abort(400) # Bad request
+
+    hash_obj = hmac.new(paystack_secret.encode('utf-8'), payload_body, hashlib.sha512)
+    expected_signature = hash_obj.hexdigest()
+
+    if not hmac.compare_digest(expected_signature, signature):
+        print("Webhook Error: Invalid signature.")
+        abort(400) # Invalid signature, reject request
+    
+    # If signature is valid, then process the event
+    event_data = request.get_json()
+    event_type = event_data.get('event')
+    data = event_data.get('data', {})
+
+    print(f"Webhook received and verified: {event_type}")
+    print(f"Webhook data: {json.dumps(data, indent=2)}") # Pretty print JSON data
+
+    # 2. Handle relevant events
+    if event_type == 'charge.success':
+        customer_email = data.get('customer', {}).get('email')
+        paystack_customer_code = data.get('customer', {}).get('customer_code')
+        # Check if this charge is related to a subscription (for renewals)
+        # The 'plan' object might be in data, or 'plan_object', or within 'authorization'
+        # This part needs careful checking of Paystack's webhook payload for recurring payments.
+        # For now, let's assume a charge.success for a known customer with a subscription code needs renewal.
         
-        prompt = construct_local_biz_caption_prompt(data)
+        user = User.query.filter_by(email=customer_email).first()
+        if not user and paystack_customer_code:
+            user = User.query.filter_by(paystack_customer_code=paystack_customer_code).first()
+
+        if user:
+            # This is a simplified renewal logic. Robust logic would check the specific subscription.
+            if user.subscription_tier in ['standard', 'premium'] and user.subscription_status == 'active':
+                print(f"Processing renewal for user: {user.email}, tier: {user.subscription_tier}")
+                user.monthly_generations_used = 0
+                # Ideally, get next payment date from Paystack if available in webhook, or calculate
+                if user.current_period_end:
+                     user.current_period_end = user.current_period_end + datetime.timedelta(days=30) # Approximate
+                else: # Fallback if current_period_end was not set
+                    user.current_period_end = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=30)
+                
+                # Update paystack_subscription_code if provided and different (e.g., if it's a new subscription instance)
+                new_sub_code = data.get("subscription", {}).get("subscription_code")
+                if new_sub_code:
+                    user.paystack_subscription_code = new_sub_code
+
+                db.session.commit()
+                print(f"Subscription for {user.email} renewed. Next period ends: {user.current_period_end}")
+            elif user.subscription_tier == 'founder' and user.is_founder:
+                 # Founder pack is one-time for 3 months, renewals not applicable in the same way.
+                 # This event might be for the initial founder payment.
+                 print(f"Charge.success received for founder: {user.email}. No renewal action taken by this simple webhook.")
+            else:
+                print(f"Charge.success for user {user.email}, but not a standard/premium active subscription. No action.")
+        else:
+            print(f"Webhook Error: User not found for customer email {customer_email} or code {paystack_customer_code}")
+
+    elif event_type == 'subscription.create':
+        customer_code = data.get('customer', {}).get('customer_code')
+        subscription_code = data.get('subscription_code')
+        plan_code = data.get('plan', {}).get('plan_code')
+        user = User.query.filter_by(paystack_customer_code=customer_code).first()
+        if user:
+            user.paystack_subscription_code = subscription_code
+            # Determine tier based on plan_code and update if necessary
+            for tier, pc in PAYSTACK_PLAN_CODES.items():
+                if pc == plan_code:
+                    user.subscription_tier = tier
+                    user.monthly_generations_allowed = TIER_DETAILS[tier]["generations"]
+                    if tier == "founder":
+                        user.is_founder = True
+                        user.current_period_end = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=TIER_DETAILS[tier]["duration_days"])
+                    else:
+                        user.current_period_end = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=30) # Approx
+                    break
+            user.subscription_status = 'active'
+            user.monthly_generations_used = 0
+            db.session.commit()
+            print(f"Subscription created/updated via webhook for user {user.email}, sub_code: {subscription_code}")
+        else:
+            print(f"Webhook Error: User not found for customer code {customer_code} on subscription.create")
+
+
+    elif event_type == 'subscription.disable':
+        subscription_code = data.get('subscription_code')
+        # Find user by paystack_subscription_code
+        user = User.query.filter_by(paystack_subscription_code=subscription_code).first()
+        if user:
+            user.subscription_status = 'inactive' # Or 'cancelled' depending on reason
+            db.session.commit()
+            print(f"Subscription disabled for user {user.email} via webhook.")
+        else:
+            print(f"Webhook Error: User not found for subscription_code {subscription_code} on subscription.disable")
+            
+    # Add more event handlers as needed (e.g., invoice.payment_failed, subscription.expiring)
+
+    return jsonify({"status": "success"}), 200
+
+
+# --- Content Generation Routes (Usage tracking logic included) ---
+@app.route('/generate_local_biz_captions', methods=['POST'])
+@login_required 
+# ... (Full logic from content_engine_flask_app_v2_09_founder_pack) ...
+def generate_local_biz_captions():
+    if current_user.is_founder and current_user.current_period_end and datetime.datetime.now(datetime.UTC) > current_user.current_period_end:
+        flash("Your Founder's Pack access has expired. Please subscribe to a plan to continue.", "info")
+        current_user.subscription_tier = 'free'; current_user.is_founder = False
+        current_user.monthly_generations_allowed = 10; current_user.free_generations_used = 0; current_user.monthly_generations_used = 0
+        db.session.commit(); return jsonify({"error": "Founder's Pack expired. Please subscribe."}), 403
+    if current_user.subscription_status != 'active': return jsonify({"error": "Subscription not active."}), 403
+    allowed_generations = current_user.monthly_generations_allowed; used_generations_field = 'monthly_generations_used'; limit_type = "monthly"
+    if current_user.subscription_tier == 'free': used_generations_field = 'free_generations_used'; limit_type = "free"
+    if getattr(current_user, used_generations_field) >= allowed_generations:
+        return jsonify({"error": f"Your {limit_type} generation limit ({allowed_generations}) reached. Please upgrade or wait for reset."}), 403
+    if not gemini_model: return jsonify({"error": "Gemini API model not configured."}), 500
+    try:
+        data = request.get_json(); prompt = construct_local_biz_caption_prompt(data)
         print("---- Constructed Local Biz Prompt ----\n", prompt, "\n------------------------------------")
-        
-        response = model.generate_content(prompt)
-        generated_text = ""
-        if response.candidates and response.candidates[0].content.parts:
-            generated_text = response.candidates[0].content.parts[0].text
-        elif hasattr(response, 'text') and response.text: 
-            generated_text = response.text
-        
+        response = gemini_model.generate_content(prompt); generated_text = ""
+        if response.candidates and response.candidates[0].content.parts: generated_text = response.candidates[0].content.parts[0].text
+        elif hasattr(response, 'text') and response.text: generated_text = response.text
         print("---- Gemini API Response Text (Local Biz) ----\n", generated_text, "\n--------------------------------------------")
-        
         num_variations_requested = int(data.get('numVariations', 3))
         final_content = parse_ai_response_into_blocks(generated_text, num_variations_requested)
-        
         print("---- Parsed Content Blocks (Local Biz) ----\n", final_content, "\n-------------------------------------")
-
         if not final_content:
-            error_message = "The AI could not generate captions. Please try rephrasing."
+            error_message = "AI could not generate content."; 
             if hasattr(response, 'prompt_feedback') and response.prompt_feedback: 
                 for rating in response.prompt_feedback.safety_ratings:
                     if rating.category.name != "HARM_CATEGORY_UNSPECIFIED" and rating.probability.name not in ["NEGLIGIBLE", "LOW"]:
-                        error_message = f"Content generation blocked: ({rating.category.name}). Revise input."
-                        break
+                        error_message = f"Content generation blocked: ({rating.category.name}). Revise input."; break
             return jsonify({"error": error_message}), 400
-        
-        return jsonify({"captions": final_content})
-    except Exception as e:
-        print(f"Error during local biz caption generation: {e}")
-        return jsonify({"error": f"An internal error occurred: {str(e)}"}), 500
+        setattr(current_user, used_generations_field, getattr(current_user, used_generations_field) + 1)
+        db.session.commit(); return jsonify({"captions": final_content})
+    except Exception as e: print(f"Error: {e}"); return jsonify({"error": f"Internal error: {str(e)}"}), 500
 
 @app.route('/generate_artisan_description', methods=['POST'])
+@login_required 
 def generate_artisan_description():
-    if not model: return jsonify({"error": "Gemini API model not configured."}), 500
+    # ... (Full logic from content_engine_flask_app_v2_09_founder_pack) ...
+    if current_user.is_founder and current_user.current_period_end and datetime.datetime.now(datetime.UTC) > current_user.current_period_end:
+        flash("Your Founder's Pack access has expired. Please subscribe to a plan to continue.", "info")
+        current_user.subscription_tier = 'free'; current_user.is_founder = False
+        current_user.monthly_generations_allowed = 10; current_user.free_generations_used = 0; current_user.monthly_generations_used = 0
+        db.session.commit(); return jsonify({"error": "Founder's Pack expired. Please subscribe."}), 403
+    if current_user.subscription_status != 'active': return jsonify({"error": "Subscription not active."}), 403
+    if current_user.subscription_tier == 'standard': return jsonify({"error": "Artisan tool requires Premium or Founder's plan. Please upgrade."}), 403
+    allowed_generations = current_user.monthly_generations_allowed; used_generations_field = 'monthly_generations_used'; limit_type = "monthly"
+    if current_user.subscription_tier == 'free': used_generations_field = 'free_generations_used'; limit_type = "free"
+    if getattr(current_user, used_generations_field) >= allowed_generations:
+         return jsonify({"error": f"Your {limit_type} generation limit ({allowed_generations}) reached. Please upgrade or wait for reset."}), 403
+    if not gemini_model: return jsonify({"error": "Gemini API model not configured."}), 500
     try:
-        data = request.get_json()
-        if not data: return jsonify({"error": "No data provided."}), 400
-        
-        prompt = construct_artisan_description_prompt(data)
+        data = request.get_json(); prompt = construct_artisan_description_prompt(data)
         print("---- Constructed Artisan Prompt ----\n", prompt, "\n----------------------------------")
-
-        response = model.generate_content(prompt)
-        generated_text = ""
-        if response.candidates and response.candidates[0].content.parts:
-            generated_text = response.candidates[0].content.parts[0].text
-        elif hasattr(response, 'text') and response.text:
-            generated_text = response.text
-
+        response = gemini_model.generate_content(prompt); generated_text = ""
+        if response.candidates and response.candidates[0].content.parts: generated_text = response.candidates[0].content.parts[0].text
+        elif hasattr(response, 'text') and response.text: generated_text = response.text
         print("---- Gemini API Response Text (Artisan) ----\n", generated_text, "\n--------------------------------------------")
-
         num_variations_requested = int(data.get('numVariations', 2))
         final_content = parse_ai_response_into_blocks(generated_text, num_variations_requested)
-
         print("---- Parsed Content Blocks (Artisan) ----\n", final_content, "\n---------------------------------------")
-        
         if not final_content:
-            error_message = "The AI could not generate descriptions. Please try rephrasing."
+            error_message = "AI could not generate content."; 
             if hasattr(response, 'prompt_feedback') and response.prompt_feedback: 
                  for rating in response.prompt_feedback.safety_ratings:
                     if rating.category.name != "HARM_CATEGORY_UNSPECIFIED" and rating.probability.name not in ["NEGLIGIBLE", "LOW"]:
-                        error_message = f"Content generation blocked: ({rating.category.name}). Revise input."
-                        break
+                        error_message = f"Content generation blocked: ({rating.category.name}). Revise input."; break
             return jsonify({"error": error_message}), 400
-        
-        return jsonify({"descriptions": final_content})
-    except Exception as e:
-        print(f"Error during artisan description generation: {e}")
-        return jsonify({"error": f"An internal error occurred: {str(e)}"}), 500
+        setattr(current_user, used_generations_field, getattr(current_user, used_generations_field) + 1)
+        db.session.commit(); return jsonify({"descriptions": final_content})
+    except Exception as e: print(f"Error: {e}"); return jsonify({"error": f"Internal error: {str(e)}"}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
-

@@ -1,0 +1,34 @@
+{# templates/register.html #}
+
+{% extends "base.html" %} {# Extends the base.html template #}
+{% import "_macros.html" as macros %} {# Imports our macros file #}
+
+{% block title %}Register - Content Engine AI{% endblock %}
+
+{% block content %}
+<div class="bg-slate-800/80 backdrop-blur-md shadow-xl rounded-xl p-6 md:p-10 w-full max-w-md mx-auto">
+    <h2 class="text-3xl font-bold text-center text-sky-400 mb-8">Create Your Account</h2>
+    
+    <form method="POST" action="{{ url_for('register') }}" novalidate class="space-y-6">
+        {{ form.hidden_tag() }} {# CSRF token - important for security with Flask-WTF #}
+
+        {{ macros.render_field(form.username, placeholder_text="Choose a username (optional)") }}
+        {{ macros.render_field(form.email, placeholder_text="your.email@example.com") }}
+        {{ macros.render_field(form.password, placeholder_text="Enter your password") }}
+        {{ macros.render_field(form.confirm_password, placeholder_text="Confirm your password") }}
+        
+        <div>
+            {{ macros.render_field(form.submit) }}
+        </div>
+    </form>
+    <div class="mt-6 text-center">
+        <p class="text-sm text-slate-400">
+            Already have an account? 
+            <a href="{{ url_for('login') }}" class="font-medium text-indigo-400 hover:text-indigo-300">
+                Log In
+            </a>
+        </p>
+    </div>
+</div>
+{% endblock %}
+
