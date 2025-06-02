@@ -8,24 +8,28 @@ from flask import Flask, render_template, request, jsonify, redirect, url_for, f
 from dotenv import load_dotenv
 import google.generativeai as genai
 import requests 
+from dateutil.parser import isoparse # For parsing ISO 8601 date strings from Paystack
 
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from flask_login import LoginManager, UserMixin, login_user, logout_user, current_user, login_required
 from werkzeug.security import generate_password_hash, check_password_hash
-from dateutil.parser import isoparse # For parsing ISO 8601 date strings from Paystack
 
 from forms import RegistrationForm, LoginForm 
 
 load_dotenv()
 app = Flask(__name__)
 
-app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY') or 'v2_webhook_secret_CHANGE_ME_PLEASE_FINAL_AGAIN'
+app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY') or 'v2_webhook_secret_CHANGE_ME_PLEASE_FINAL_AGAIN_2' # IMPORTANT
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL') or 'sqlite:///site.db' 
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['PAYSTACK_SECRET_KEY'] = os.environ.get('PAYSTACK_SECRET_KEY') 
 
-FOUNDER_PACKS_CLAIMED = 0 # This should ideally be fetched from DB on app start for persistence
+# --- Global Variables for Founder's Pack (MVP approach) ---
+# For better persistence, especially with multiple workers or app restarts, 
+# this counter should ideally be stored and managed in the database.
+# An 'AppSettings' table with a key-value pair could work.
+FOUNDER_PACKS_CLAIMED = 0 
 MAX_FOUNDER_PACKS = 20 
 
 db = SQLAlchemy(app)
@@ -63,18 +67,16 @@ def inject_now(): return {'now': datetime.datetime.now(datetime.UTC)}
 
 @app.context_processor 
 def inject_founder_pack_status():
-    global FOUNDER_PACKS_CLAIMED # This global var needs proper initialization on app start for persistence
-    # actual_claimed_count = User.query.filter_by(is_founder=True).count() # Better approach
-    # founder_packs_available = actual_claimed_count < MAX_FOUNDER_PACKS
-    # founder_packs_remaining = MAX_FOUNDER_PACKS - actual_claimed_count
+    global FOUNDER_PACKS_CLAIMED 
+    # In a production scenario, fetch/update FOUNDER_PACKS_CLAIMED from a persistent store (DB)
+    # This global variable will reset on app restart.
+    # For example, on app start:
+    # with app.app_context(): FOUNDER_PACKS_CLAIMED = User.query.filter_by(is_founder=True).count()
     return dict(
         founder_packs_available=(FOUNDER_PACKS_CLAIMED < MAX_FOUNDER_PACKS),
         founder_packs_remaining=(MAX_FOUNDER_PACKS - FOUNDER_PACKS_CLAIMED)
     )
 
-# --- Gemini API Model & Prompt/Parsing Functions (Keep as latest correct versions) ---
-# (construct_local_biz_caption_prompt, construct_artisan_description_prompt, parse_ai_response_into_blocks)
-# These are assumed to be from content_engine_flask_app_v2_09_founder_pack (or latest working)
 try:
     gemini_api_key = os.getenv("GEMINI_API_KEY")
     if not gemini_api_key: print("Warning: GEMINI_API_KEY not found.")
@@ -84,8 +86,8 @@ except Exception as e:
     print(f"Error configuring Gemini API: {e}")
     gemini_model = None
 
+# --- Prompt Construction & Parsing Functions (ensure these are your latest working versions) ---
 def construct_local_biz_caption_prompt(data):
-    # ... (Full code for this function) ...
     business_name = data.get('businessName') or "Our business"; business_type = data.get('businessType', 'local business')
     post_type = data.get('postType', 'general announcement').replace('_', ' '); key_message = data.get('keyMessage', 'something exciting!')
     target_audience = data.get('targetAudience'); tone = data.get('tone', 'friendly & casual').replace('_', ' ')
@@ -113,7 +115,6 @@ def construct_local_biz_caption_prompt(data):
     return "\n".join(prompt_lines)
 
 def construct_artisan_description_prompt(data):
-    # ... (Full code for this function) ...
     creator_name = data.get('creatorName'); product_name = data.get('productName', 'this unique item')
     product_category = data.get('productCategory', 'handmade product'); key_materials = data.get('keyMaterials', 'quality materials')
     creation_process = data.get('creationProcess'); inspiration = data.get('inspiration')
@@ -138,7 +139,6 @@ def construct_artisan_description_prompt(data):
     return "\n".join(prompt_lines)
 
 def parse_ai_response_into_blocks(generated_text, num_variations_requested):
-    # ... (Full robust parsing function) ...
     if not generated_text: return []
     lines = [line.strip() for line in generated_text.splitlines()]
     all_complete_variations = []; current_variation_lines = []
@@ -154,13 +154,12 @@ def parse_ai_response_into_blocks(generated_text, num_variations_requested):
     if current_variation_lines and len(all_complete_variations) < num_variations_requested:
         all_complete_variations.append("\n".join(current_variation_lines))
     return all_complete_variations[:num_variations_requested] if len(all_complete_variations) > num_variations_requested else all_complete_variations
-# --- End Prompt/Parsing ---
 
 # --- Auth & Main Routes ---
 @app.route('/')
 def index(): return render_template('index.html', title="Home")
+
 @app.route('/register', methods=['GET', 'POST'])
-# ... (Full registration logic) ...
 def register():
     if current_user.is_authenticated: return redirect(url_for('index')) 
     form = RegistrationForm()
@@ -180,7 +179,6 @@ def register():
     return render_template('register.html', title='Register', form=form)
 
 @app.route('/login', methods=['GET', 'POST'])
-# ... (Full login logic) ...
 def login():
     if current_user.is_authenticated: return redirect(url_for('index'))
     form = LoginForm()
@@ -195,12 +193,13 @@ def login():
 @app.route('/logout')
 @login_required 
 def logout(): logout_user(); flash('You have been logged out.', 'info'); return redirect(url_for('index'))
+
 @app.route('/account')
 @login_required
 def account(): return render_template('account.html', title='My Account') 
+
 @app.route('/pricing') 
 def pricing(): return render_template('pricing.html', title='Pricing') 
-# --- End Auth Routes ---
 
 # --- Paystack Integration Routes ---
 PAYSTACK_BASE_URL = 'https://api.paystack.co'
@@ -210,13 +209,12 @@ PAYSTACK_PLAN_CODES = {
     "founder": os.environ.get("PAYSTACK_FOUNDER_PACK_CODE", "PLN_lxwft3ddtlakbd6")
 }
 TIER_DETAILS = {
-    "founder": {"name": "Founder's Pack", "generations": 150, "tools": ["local_biz", "artisan"], "duration_days": 90, "price_kobo": 100000, "is_recurring": True},
-    "standard": {"name": "Standard", "generations": 50, "tools": ["local_biz"], "price_kobo": 100000, "is_recurring": True},
-    "premium": {"name": "Premium", "generations": 150, "tools": ["local_biz", "artisan"], "price_kobo": 150000, "is_recurring": True}
+    "founder": {"name": "Founder's Pack", "generations": 150, "duration_days": 90, "price_kobo": 100000, "is_recurring": True},
+    "standard": {"name": "Standard", "generations": 50, "price_kobo": 100000, "is_recurring": True},
+    "premium": {"name": "Premium", "generations": 150, "price_kobo": 150000, "is_recurring": True}
 }
 
 @app.route('/subscribe/<tier_key>')
-# ... (Full subscribe logic) ...
 @login_required
 def subscribe(tier_key):
     global FOUNDER_PACKS_CLAIMED, MAX_FOUNDER_PACKS 
@@ -226,90 +224,118 @@ def subscribe(tier_key):
     if tier_key == "founder":
         if current_user.is_founder or current_user.subscription_tier == 'founder':
             flash("You have already claimed or have an active Founder's Pack.", "info"); return redirect(url_for('account'))
-        # actual_founder_count = User.query.filter_by(is_founder=True).count() # DB persisted count
-        # if actual_founder_count >= MAX_FOUNDER_PACKS: # Use this for production
-        if FOUNDER_PACKS_CLAIMED >= MAX_FOUNDER_PACKS: # Using global for MVP
+        if FOUNDER_PACKS_CLAIMED >= MAX_FOUNDER_PACKS: # Simplistic counter
             flash("Sorry, all Founder's Packs have been claimed.", "info"); return redirect(url_for('pricing'))
+    # Prevent re-subscribing to same or lower if active
     if tier_key == "standard" and (current_user.subscription_tier == 'standard' or current_user.subscription_tier == 'premium' or current_user.subscription_tier == 'founder') and current_user.subscription_status == 'active':
         flash(f"You are already on the {current_user.subscription_tier} plan or higher.", "info"); return redirect(url_for('account'))
     if tier_key == "premium" and (current_user.subscription_tier == 'premium' or current_user.subscription_tier == 'founder') and current_user.subscription_status == 'active':
         flash(f"You are already on the {current_user.subscription_tier} plan or higher.", "info"); return redirect(url_for('account'))
+
     headers = {"Authorization": f"Bearer {app.config['PAYSTACK_SECRET_KEY']}", "Content-Type": "application/json"}
-    callback_url = url_for('paystack_callback', _external=True, _scheme='https') # Ensure HTTPS for callback
+    callback_url = url_for('paystack_callback', _external=True, _scheme='https')
     reference = f"user{current_user.id}_{tier_key}_{int(datetime.datetime.now().timestamp())}"
     payload = {
         "email": current_user.email, "amount": tier_info["price_kobo"], 
         "callback_url": callback_url, "reference": reference,
         "metadata": {
             "user_id": current_user.id, "tier_key": tier_key,
-            "plan_code_used": PAYSTACK_PLAN_CODES.get(tier_key),
+            "plan_code_used": PAYSTACK_PLAN_CODES.get(tier_key), # Store the plan code if applicable
             "custom_fields": [
                 {"display_name": "User ID", "variable_name": "user_id", "value": str(current_user.id)},
-                {"display_name": "Selected Plan", "variable_name": "selected_plan", "value": tier_info["name"]}
+                {"display_name": "Selected Plan Name", "variable_name": "selected_plan_name", "value": tier_info["name"]}
             ]
         }
     }
-    if tier_info["is_recurring"] and PAYSTACK_PLAN_CODES.get(tier_key): payload['plan'] = PAYSTACK_PLAN_CODES[tier_key]
+    if tier_info["is_recurring"] and PAYSTACK_PLAN_CODES.get(tier_key):
+        payload['plan'] = PAYSTACK_PLAN_CODES[tier_key]
+        # For recurring plans, amount might be taken from plan, but Paystack often still requires it in payload
     if current_user.paystack_customer_code: payload['customer'] = current_user.paystack_customer_code
+    
     try:
-        print(f"Initializing Paystack transaction: {payload}")
+        print(f"Initializing Paystack transaction: {json.dumps(payload)}") # Ensure payload is serializable for print
         response = requests.post(f"{PAYSTACK_BASE_URL}/transaction/initialize", headers=headers, json=payload)
-        response.raise_for_status(); paystack_response = response.json()
-        if paystack_response.get("status"): print(f"Redirecting to Paystack: {paystack_response['data']['authorization_url']}"); return redirect(paystack_response["data"]["authorization_url"])
-        else: flash(f"Paystack: {paystack_response.get('message', 'Error')}", "danger"); print(f"Paystack Init Error: {paystack_response.get('message')}"); return redirect(url_for('account'))
-    except Exception as e: flash(f"Payment gateway error. Try again.", "danger"); print(f"Paystack Error: {e}"); return redirect(url_for('account'))
+        response.raise_for_status() 
+        paystack_response = response.json()
+        if paystack_response.get("status"):
+            print(f"Redirecting to Paystack: {paystack_response['data']['authorization_url']}")
+            return redirect(paystack_response["data"]["authorization_url"])
+        else:
+            flash(f"Paystack Error: {paystack_response.get('message', 'Could not initialize payment.')}", "danger")
+            print(f"Paystack Init Error: {paystack_response.get('message')}")
+            return redirect(url_for('account'))
+    except requests.exceptions.RequestException as e:
+        flash(f"Payment gateway connection error. Please try again later.", "danger")
+        print(f"Paystack API Request Error: {e}")
+        return redirect(url_for('account'))
+    except Exception as e:
+        flash(f"An unexpected error occurred during payment setup. Please try again.", "danger")
+        print(f"Unexpected Payment Init Error: {e}")
+        return redirect(url_for('account'))
 
 @app.route('/paystack_callback')
-# ... (Full callback logic) ...
 @login_required 
 def paystack_callback():
     reference = request.args.get('trxref') or request.args.get('reference')
-    if not reference: flash("Payment reference missing.", "danger"); return redirect(url_for('index')) 
+    if not reference: flash("Payment reference missing from Paystack.", "danger"); return redirect(url_for('index')) 
+
     headers = { "Authorization": f"Bearer {app.config['PAYSTACK_SECRET_KEY']}" }
     try:
         print(f"Verifying Paystack transaction: {reference}")
         response = requests.get(f"{PAYSTACK_BASE_URL}/transaction/verify/{reference}", headers=headers)
         response.raise_for_status(); verification_data = response.json()
-        print(f"Paystack Verification Data: {verification_data}")
+        print(f"Paystack Verification Data: {json.dumps(verification_data, indent=2)}")
+
         if verification_data.get("status") and verification_data["data"]["status"] == "success":
             payment_data = verification_data["data"]; customer_data = payment_data.get("customer", {})
-            metadata = payment_data.get("metadata", {}); user_id_from_meta = metadata.get("user_id") if metadata else None
+            metadata = payment_data.get("metadata", {}); 
+            user_id_from_meta = metadata.get("user_id") if isinstance(metadata, dict) else None # Check if metadata is dict
+            
             if not user_id_from_meta or str(current_user.id) != str(user_id_from_meta):
-                flash("Payment verification user mismatch.", "danger"); return redirect(url_for('index'))
-            tier_key = metadata.get("tier_key")
+                flash("Payment verification user mismatch. Contact support.", "danger"); return redirect(url_for('index'))
+
+            tier_key = metadata.get("tier_key") if isinstance(metadata, dict) else None
+            
             if tier_key and tier_key in TIER_DETAILS:
                 tier_info = TIER_DETAILS[tier_key]
                 current_user.subscription_tier = tier_key; current_user.subscription_status = 'active'
                 current_user.paystack_customer_code = customer_data.get("customer_code", current_user.paystack_customer_code)
                 current_user.monthly_generations_allowed = tier_info["generations"]
-                current_user.monthly_generations_used = 0; current_user.free_generations_used = 10 
+                current_user.monthly_generations_used = 0; current_user.free_generations_used = 10 # Max out free uses
+                
                 if tier_key == "founder":
                     global FOUNDER_PACKS_CLAIMED, MAX_FOUNDER_PACKS 
                     if FOUNDER_PACKS_CLAIMED < MAX_FOUNDER_PACKS and not current_user.is_founder:
                         current_user.is_founder = True
                         current_user.current_period_end = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=tier_info["duration_days"])
                         FOUNDER_PACKS_CLAIMED += 1 
-                        print(f"Founder pack successfully applied for user {current_user.email}. Count: {FOUNDER_PACKS_CLAIMED}")
+                        print(f"Founder pack applied for user {current_user.email}. Count: {FOUNDER_PACKS_CLAIMED}")
                     else: 
-                        flash("Founder pack could not be applied (limit or already claimed). Contact support.", "warning")
-                        return redirect(url_for('account'))
+                        flash("Founder pack unavailable or already claimed. Contact support.", "warning")
+                        return redirect(url_for('account')) # Don't commit if founder pack fails
                 else: 
                     current_user.is_founder = False 
-                    current_user.paystack_subscription_code = payment_data.get("subscription", {}).get("subscription_code") or \
-                                                             payment_data.get("plan_object", {}).get("subscription_code", current_user.paystack_subscription_code)
+                    # Get subscription code from plan_object or subscription part of verification data
+                    current_user.paystack_subscription_code = payment_data.get("plan_object", {}).get("subscriptions", [{}])[0].get("subscription_code") or \
+                                                               payment_data.get("subscription", {}).get("subscription_code", current_user.paystack_subscription_code)
                     current_user.current_period_end = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=30) 
+                
                 db.session.commit()
                 flash(f"Your {tier_info['name']} access has been activated!", "success")
-            else: flash("Subscription plan details unclear after payment. Contact support.", "warning")
+            else: flash("Subscription plan details unclear. Contact support.", "warning")
             return redirect(url_for('account'))
         else:
-            flash(f"Paystack payment verification failed: {verification_data.get('message', 'Error')}", "danger")
+            flash(f"Paystack payment not successful: {verification_data.get('data', {}).get('gateway_response', 'Unknown reason')}", "danger")
             return redirect(url_for('account'))
+    except requests.exceptions.HTTPError as e:
+        flash(f"Error verifying payment with Paystack: {e.response.status_code}. Please contact support if payment was made.", "danger")
+        print(f"Paystack Verification HTTP Error: {e} - Response: {e.response.text if e.response else 'No response'}")
+        return redirect(url_for('account'))
     except Exception as e:
         flash(f"Payment verification error. Contact support.", "danger"); print(f"Paystack Callback Error: {e}")
         return redirect(url_for('account'))
 
-# --- Paystack Webhook Handler (UPDATED with more detailed logic) ---
+# --- Paystack Webhook Handler (Enhanced) ---
 @app.route('/paystack_webhook', methods=['POST'])
 def paystack_webhook():
     paystack_secret = app.config['PAYSTACK_SECRET_KEY']
@@ -317,151 +343,104 @@ def paystack_webhook():
     payload_body = request.data 
 
     if not signature or not paystack_secret:
-        print("Webhook Error: Missing signature or Paystack secret key in app config.")
-        abort(400) 
-
+        print("Webhook Error: Missing signature or Paystack secret key."); abort(400) 
     hash_obj = hmac.new(paystack_secret.encode('utf-8'), payload_body, hashlib.sha512)
     expected_signature = hash_obj.hexdigest()
-
     if not hmac.compare_digest(expected_signature, signature):
-        print("Webhook Error: Invalid signature.")
-        abort(400) 
+        print("Webhook Error: Invalid signature."); abort(400) 
     
-    event_data_full = request.get_json()
-    event_type = event_data_full.get('event')
-    data = event_data_full.get('data', {}) # The 'data' object within the event
+    event_data_full = request.get_json(); event_type = event_data_full.get('event')
+    data = event_data_full.get('data', {})
+    print(f"Webhook received and verified: {event_type}"); print(f"Webhook data: {json.dumps(data, indent=2)}")
 
-    print(f"Webhook received and verified: {event_type}")
-    print(f"Webhook data: {json.dumps(data, indent=2)}")
-
-    user = None
-    customer_data = data.get('customer', {})
+    user = None; customer_data = data.get('customer', {})
     if customer_data:
-        customer_email = customer_data.get('email')
-        customer_code = customer_data.get('customer_code')
+        customer_email = customer_data.get('email'); customer_code = customer_data.get('customer_code')
         if customer_email: user = User.query.filter_by(email=customer_email).first()
         if not user and customer_code: user = User.query.filter_by(paystack_customer_code=customer_code).first()
     
     if not user:
-        subscription_code_from_event = data.get('subscription_code') # Common for subscription events
-        if not subscription_code_from_event and isinstance(data.get('subscription'), dict): # For subscription.cancel
-            subscription_code_from_event = data['subscription'].get('subscription_code')
-        if not subscription_code_from_event and isinstance(data.get('plan_object'), dict): # For charge.success on plan
-             if isinstance(data.get('plan_object').get('subscriptions'), list) and data['plan_object']['subscriptions']:
-                 subscription_code_from_event = data['plan_object']['subscriptions'][0].get('subscription_code')
-
-
-        if subscription_code_from_event:
-            user = User.query.filter_by(paystack_subscription_code=subscription_code_from_event).first()
-        
+        sub_code_event = data.get('subscription_code') or \
+                         (isinstance(data.get('subscription'), dict) and data['subscription'].get('subscription_code')) or \
+                         (isinstance(data.get('plan_object'), dict) and isinstance(data['plan_object'].get('subscriptions'), list) and data['plan_object']['subscriptions'] and data['plan_object']['subscriptions'][0].get('subscription_code'))
+        if sub_code_event: user = User.query.filter_by(paystack_subscription_code=sub_code_event).first()
         if not user:
-             print(f"Webhook: User not found for event. Customer Data: {customer_data}, Subscription Code in Event: {subscription_code_from_event}")
-             return jsonify({"status": "success", "message": "User not determinable or event not relevant to a tracked user"}), 200
+             print(f"Webhook: User not found. Cust Data: {customer_data}, Sub Code: {sub_code_event}")
+             return jsonify({"status": "success", "message": "User not found or event not relevant"}), 200
 
     if user:
         print(f"Webhook: Processing event for user {user.email}")
         if event_type == 'charge.success':
-            # This is often for a successful renewal or the initial charge that creates a subscription.
-            # The /paystack_callback handles the initial charge and subscription setup for the user journey.
-            # This webhook handler should focus on renewals or ensuring data sync.
-            
-            # Check if this charge is tied to a known subscription for this user
-            if data.get('plan') and user.paystack_subscription_code: # 'plan' object exists in charge.success for subscriptions
-                paystack_plan_code_from_charge = data['plan'].get('plan_code')
-                # Verify if this charge corresponds to the user's active Paystack subscription code
-                # Note: Paystack's charge.success for a subscription might not always directly contain the subscription_code.
-                # It often contains customer and plan details. Linking via customer_code and plan_code is safer.
+            # For subscription renewals. Initial charge success is handled by callback.
+            # A charge.success may also relate to a subscription if it contains plan/subscription info.
+            plan_data = data.get('plan', {}) # For one-time charges tied to plans
+            subscription_data_from_charge = data.get('subscription', {}) # For charge events tied to subscriptions API
+
+            if user.paystack_subscription_code and \
+               (user.paystack_subscription_code == subscription_data_from_charge.get('subscription_code') or \
+                PAYSTACK_PLAN_CODES.get(user.subscription_tier) == plan_data.get('plan_code') ):
+                print(f"Processing RENEWAL via charge.success for user: {user.email}, tier: {user.subscription_tier}")
+                user.monthly_generations_used = 0; user.subscription_status = 'active' 
+                paid_at_str = data.get('paid_at')
+                next_payment_date_str = subscription_data_from_charge.get('next_payment_date') # Ideal for next period end
                 
-                is_renewal = False
-                if user.subscription_tier in ['standard', 'premium', 'founder'] and \
-                   user.subscription_status == 'active' and \
-                   PAYSTACK_PLAN_CODES.get(user.subscription_tier) == paystack_plan_code_from_charge:
-                    is_renewal = True
-
-                if is_renewal:
-                    print(f"Processing RENEWAL via charge.success for user: {user.email}, tier: {user.subscription_tier}")
-                    user.monthly_generations_used = 0
-                    user.subscription_status = 'active' 
-                    # Try to get next_payment_date from Paystack for more accuracy
-                    # This might be in data.subscription.next_payment_date if it's a subscription charge event.
-                    # For a simple charge.success, we might just extend by 30 days from now or previous end.
-                    if data.get('paid_at'):
-                        paid_at_dt = isoparse(data['paid_at']) # Make sure to import isoparse from dateutil.parser
-                        user.current_period_end = paid_at_dt + datetime.timedelta(days=30) # More accurate based on payment
-                    else:
-                        user.current_period_end = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=30)
-                    db.session.commit()
-                    print(f"Subscription for {user.email} renewed via webhook. Next period ends: {user.current_period_end}")
-                else:
-                    print(f"Charge.success for user {user.email}, but not identified as a direct renewal for their current app subscription. Might be initial payment (handled by callback) or other charge.")
-            else:
-                 print(f"Charge.success for user {user.email}, but no plan information in webhook or no active Paystack subscription code on user record. This might be the initial charge for Founder's pack if not a recurring plan.")
-
-
-        elif event_type == 'subscription.create':
-            subscription_code = data.get('subscription_code')
-            plan_code = data.get('plan', {}).get('plan_code')
-            customer_code = data.get('customer', {}).get('customer_code')
-            next_payment_date_str = data.get('next_payment_date')
-
-            if user.paystack_customer_code != customer_code: user.paystack_customer_code = customer_code # Update if different
-            user.paystack_subscription_code = subscription_code # Store/Update subscription code
-            
-            matched_tier = None
-            for tier_key, pc_val in PAYSTACK_PLAN_CODES.items():
-                if pc_val == plan_code: matched_tier = tier_key; break
-            
-            if matched_tier and matched_tier in TIER_DETAILS:
-                tier_info = TIER_DETAILS[matched_tier]
-                user.subscription_tier = matched_tier
-                user.monthly_generations_allowed = tier_info["generations"]
-                user.subscription_status = 'active'
-                user.monthly_generations_used = 0
                 if next_payment_date_str:
                     try: user.current_period_end = isoparse(next_payment_date_str)
                     except: user.current_period_end = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=30)
-                elif matched_tier == 'founder': 
-                     user.current_period_end = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=TIER_DETAILS["founder"]["duration_days"])
-                else: 
-                     user.current_period_end = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=30)
+                elif paid_at_str: # If next_payment_date not available, calculate from paid_at
+                    try: user.current_period_end = isoparse(paid_at_str) + datetime.timedelta(days=30)
+                    except: user.current_period_end = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=30)
+                else: # Fallback
+                    user.current_period_end = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=30)
+                db.session.commit(); print(f"Subscription for {user.email} renewed. Next period ends: {user.current_period_end}")
+            else: print(f"Charge.success for user {user.email} not clearly a renewal for current app sub. No action.")
+
+        elif event_type == 'subscription.create':
+            sub_code = data.get('subscription_code'); plan_code = data.get('plan', {}).get('plan_code')
+            customer_code = data.get('customer', {}).get('customer_code'); next_payment_date_str = data.get('next_payment_date')
+            if user.paystack_customer_code != customer_code: user.paystack_customer_code = customer_code
+            user.paystack_subscription_code = sub_code
+            matched_tier = None
+            for tier_key, pc_val in PAYSTACK_PLAN_CODES.items():
+                if pc_val == plan_code: matched_tier = tier_key; break
+            if matched_tier and matched_tier in TIER_DETAILS:
+                tier_info = TIER_DETAILS[matched_tier]
+                user.subscription_tier = matched_tier; user.monthly_generations_allowed = tier_info["generations"]
+                user.subscription_status = 'active'; user.monthly_generations_used = 0
+                if next_payment_date_str:
+                    try: user.current_period_end = isoparse(next_payment_date_str)
+                    except: user.current_period_end = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=30)
+                elif matched_tier == 'founder': user.current_period_end = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=TIER_DETAILS["founder"]["duration_days"])
+                else: user.current_period_end = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=30)
                 if matched_tier == 'founder': user.is_founder = True
-                db.session.commit()
-                print(f"Subscription details synced via subscription.create for user {user.email}, sub_code: {subscription_code}, tier: {matched_tier}")
-            else:
-                print(f"Webhook: Plan code {plan_code} from subscription.create not recognized for user {user.email}")
+                db.session.commit(); print(f"Sub details synced via subscription.create for {user.email}, sub: {sub_code}, tier: {matched_tier}")
+            else: print(f"Webhook: Plan code {plan_code} from sub.create not recognized for {user.email}")
 
         elif event_type in ['subscription.disable', 'subscription.cancel', 'subscription.not_renew']:
-            # Ensure this event pertains to the user's current active Paystack subscription
-            event_subscription_code = data.get('subscription_code')
-            if user.paystack_subscription_code == event_subscription_code:
+            event_sub_code = data.get('subscription_code')
+            if user.paystack_subscription_code == event_sub_code:
                 print(f"Processing {event_type} for user {user.email}")
-                user.subscription_status = 'inactive' # Or 'cancelled' based on more specific event/reason
-                # You might want to set their tier back to 'free' and generations to free tier limit
-                # or just let access control block them based on 'inactive' status.
-                # For simplicity now, just marking inactive.
-                db.session.commit()
-                print(f"Subscription status set to inactive for user {user.email} due to {event_type}.")
-            else:
-                print(f"Webhook {event_type}: subscription_code mismatch ({event_subscription_code} vs {user.paystack_subscription_code}) for user {user.email}. No action taken.")
+                user.subscription_status = 'inactive'; user.is_founder = False # If founder pack cancelled, they are no longer founder
+                # Consider reverting tier to 'free' and limits
+                # user.subscription_tier = 'free'
+                # user.monthly_generations_allowed = 10 
+                db.session.commit(); print(f"Subscription status inactive for {user.email} due to {event_type}.")
+            else: print(f"Webhook {event_type}: sub_code mismatch for {user.email}. No action.")
         
         elif event_type == 'invoice.payment_failed':
-            # This indicates a renewal payment attempt failed.
-            event_subscription_code = data.get('subscription', {}).get('subscription_code')
-            if user.paystack_subscription_code == event_subscription_code:
+            event_sub_code = data.get('subscription', {}).get('subscription_code')
+            if user.paystack_subscription_code == event_sub_code:
                 print(f"Processing {event_type} for user {user.email}")
                 user.subscription_status = 'past_due' 
-                db.session.commit()
-                print(f"Subscription status set to past_due for user {user.email} due to {event_type}.")
-            else:
-                print(f"Webhook {event_type}: subscription_code mismatch for user {user.email}. No action taken.")
-    
+                db.session.commit(); print(f"Subscription status past_due for {user.email} due to {event_type}.")
+            else: print(f"Webhook {event_type}: sub_code mismatch for {user.email}. No action.")
     return jsonify({"status": "success"}), 200
 
-# --- Content Generation Routes (Usage tracking logic included) ---
+# --- Content Generation Routes ---
 @app.route('/generate_local_biz_captions', methods=['POST'])
 @login_required 
-# ... (Full logic from content_engine_flask_app_v2_09_founder_pack) ...
 def generate_local_biz_captions():
+    # ... (Full usage tracking logic from _v2_09_founder_pack, including founder expiry check) ...
     if current_user.is_founder and current_user.current_period_end and datetime.datetime.now(datetime.UTC) > current_user.current_period_end:
         flash("Your Founder's Pack access has expired. Please subscribe to a plan to continue.", "info")
         current_user.subscription_tier = 'free'; current_user.is_founder = False
@@ -497,7 +476,7 @@ def generate_local_biz_captions():
 @app.route('/generate_artisan_description', methods=['POST'])
 @login_required 
 def generate_artisan_description():
-    # ... (Full logic from content_engine_flask_app_v2_09_founder_pack, with founder check) ...
+    # ... (Full usage tracking logic from _v2_09_founder_pack, including founder expiry check) ...
     if current_user.is_founder and current_user.current_period_end and datetime.datetime.now(datetime.UTC) > current_user.current_period_end:
         flash("Your Founder's Pack access has expired. Please subscribe to a plan to continue.", "info")
         current_user.subscription_tier = 'free'; current_user.is_founder = False
@@ -532,17 +511,18 @@ def generate_artisan_description():
     except Exception as e: print(f"Error: {e}"); return jsonify({"error": f"Internal error: {str(e)}"}), 500
 
 if __name__ == '__main__':
-    # To initialize founder pack claimed count from DB on app start (more robust)
     with app.app_context():
         try:
-            if db.inspect(db.engine).has_table(User.__tablename__):
-                FOUNDER_PACKS_CLAIMED = User.query.filter_by(is_founder=True).count()
-                print(f"Initialized Founder Packs Claimed from DB: {FOUNDER_PACKS_CLAIMED}")
+            # Attempt to initialize FOUNDER_PACKS_CLAIMED from DB
+            # This requires the User table to exist.
+            if db.engine.dialect.has_table(db.engine.connect(), User.__tablename__):
+                 FOUNDER_PACKS_CLAIMED = User.query.filter_by(is_founder=True).count()
+                 print(f"Initialized Founder Packs Claimed from DB: {FOUNDER_PACKS_CLAIMED}")
             else:
-                print("User table not found on startup, FOUNDER_PACKS_CLAIMED set to 0 by default.")
+                 print("User table not found on startup (migrations might be pending). FOUNDER_PACKS_CLAIMED set to 0.")
+                 FOUNDER_PACKS_CLAIMED = 0
         except Exception as e_init:
-            print(f"Error initializing founder pack count from DB (migrations might be pending): {e_init}")
-            FOUNDER_PACKS_CLAIMED = 0 # Default if DB query fails
+            print(f"Error initializing founder pack count from DB (migrations might be pending or DB not ready): {e_init}")
+            FOUNDER_PACKS_CLAIMED = 0 
             
     app.run(debug=True, port=5000)
-
