@@ -1,21 +1,41 @@
-# Virtual Environment
-venv/
+# Python Virtual Environments
+/venv/
+/content_engine/
+/instance/
+
+# Secret Files - VERY IMPORTANT
+# This ensures your .env file and service account keys are never uploaded.
+.env
+service-account-key.json
+*.json
+
+# Allow specific json files if they are not secrets
+!openapi.json
+!.vscode/settings.json
+!.vscode/DocumentLayout.json
+!.vscode/DocumentLayout.backup.json
+
+# IDE and Editor Folders
+.vs/
+.vscode/
+
+# Executables and Installers
+*.exe
+*.msi
+
+# Documents and other non-code files
+*.docx
+db.json
+
+# Temporary Diagnostic Scripts
+check_engines.py
+test_webhook.py
+
+# Python cache files
 __pycache__/
 *.pyc
+*.pyo
 
-# Environment files
-.env
-
-# IDE / OS specific
-.DS_Store
-.vscode/
-.idea/
-.vs/
-
-# Database files
+# SQLite Database
 site.db
-*.sqlite
-*.sqlite3
-*.db
-*.db-journal # For SQLite journal files
-instance/    # Ignore the whole instance folder
+slnx.sqlite

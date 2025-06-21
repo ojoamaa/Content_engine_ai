@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="bg-slate-800 shadow-2xl rounded-xl p-6 md:p-10 w-full max-w-4xl">
+    <header class="mb-8 text-center">
+        <h1 class="text-3xl md:text-4xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-sky-400 to-cyan-500 mb-2">
+            My Content History
+        </h1>
+        <p class="text-slate-400 text-lg">
+            All of your previously generated captions are saved here.
+        </p>
+    </header>
+
+    <div>
+        {% if history %}
+            {% for item in history %}
+            <div class="bg-slate-700 p-4 rounded-lg shadow mb-4 animate-fadeIn">
+                <p class="text-slate-200 mb-2 whitespace-pre-wrap">{{ item.caption_text }}</p>
+                
+                {% if item.visual_suggestion %}
+                <p class="text-yellow-400 italic text-base mt-2 pt-2 border-t border-slate-600">{{ item.visual_suggestion }}</p>
+                {% endif %}
+                
+                <div class="text-right text-xs text-slate-500 mt-2">
+                    Generated on: {{ item.created_at.strftime('%Y-%m-%d %H:%M') }}
+                </div>
+            </div>
+            {% endfor %}
+        {% else %}
+            <div class="text-center text-slate-400 p-8 border-2 border-dashed border-slate-700 rounded-lg">
+                <p>You haven't generated any content yet.</p>
+                <p class="mt-4">
+                    <a href="{{ url_for('index') }}" class="inline-block bg-indigo-600 text-white font-bold py-2 px-6 rounded-lg shadow-md hover:bg-indigo-700 transition duration-300">
+                        Generate Your First Caption!
+                    </a>
+                </p>
+            </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

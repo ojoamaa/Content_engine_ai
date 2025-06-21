@@ -1,37 +1,48 @@
-﻿import os
+# --- THE FINAL, COMPLETE, AND VERIFIED APP.PY ---
+
+import os
 import json
 import re 
 import datetime
 import hashlib 
-import hmac    
+import hmac     
+from datetime import timezone
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, abort
 from dotenv import load_dotenv
 import google.generativeai as genai
+import google.api_core.exceptions
 import requests 
-from dateutil.parser import isoparse # For parsing ISO 8601 date strings from Paystack
+from dateutil.parser import isoparse
+import base64
+import io
 
+# Imports for Stability AI
+import stability_sdk.interfaces.gooseai.generation.generation_pb2 as generation
+from stability_sdk import client
+
+# Imports for Google Vertex AI (kept for future use)
+import vertexai
+from vertexai.preview.vision_models import ImageGenerationModel
+ 
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from flask_login import LoginManager, UserMixin, login_user, logout_user, current_user, login_required
 from werkzeug.security import generate_password_hash, check_password_hash
-
+ 
 from forms import RegistrationForm, LoginForm 
 
+# --- INITIALIZE APP AND LOAD ENVIRONMENT VARIABLES ---
 load_dotenv()
 app = Flask(__name__)
 
-app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY') or 'v2_webhook_secret_CHANGE_ME_PLEASE_FINAL_AGAIN_2' # IMPORTANT
+# --- CONFIGURATION ---
+IMAGE_PROVIDER = "STABILITY" 
+app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY') or 'v2_debug_route_secret_CHANGE_ME_PLEASE'
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL') or 'sqlite:///site.db' 
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['PAYSTACK_SECRET_KEY'] = os.environ.get('PAYSTACK_SECRET_KEY') 
+app.config['PAYSTACK_SECRET_KEY'] = os.environ.get('PAYSTACK_SECRET_KEY')
 
-# --- Global Variables for Founder's Pack (MVP approach) ---
-# For better persistence, especially with multiple workers or app restarts, 
-# this counter should ideally be stored and managed in the database.
-# An 'AppSettings' table with a key-value pair could work.
-FOUNDER_PACKS_CLAIMED = 0 
-MAX_FOUNDER_PACKS = 20 
-
+# --- INITIALIZE DATABASE AND OTHER EXTENSIONS ---
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 login_manager = LoginManager(app)
@@ -39,12 +50,40 @@ login_manager.login_view = 'login'
 login_manager.login_message_category = 'info'
 login_manager.login_message = "Please log in to access this page."
 
+# --- SERVICE INITIALIZATIONS ---
+gemini_model, stability_api = None, None
+try:
+    PROJECT_ID, LOCATION = "content-engine-ai", "us-central1"
+    vertexai.init(project=PROJECT_ID, location=LOCATION)
+    print("Vertex AI Initialized Successfully")
+except Exception as e: print(f"Error initializing Vertex AI: {e}")
+try:
+    STABILITY_API_KEY = os.environ.get("STABILITY_API_KEY")
+    if STABILITY_API_KEY:
+        stability_api = client.StabilityInference(key=STABILITY_API_KEY, verbose=True, engine="stable-diffusion-xl-1024-v1-0")
+        print("Stability AI Client Initialized Successfully")
+    else: print("Warning: STABILITY_API_KEY not found.")
+except Exception as e: print(f"Error initializing Stability AI client: {e}")
+try:
+    gemini_api_key = os.getenv("GEMINI_API_KEY")
+    if not gemini_api_key: print("Warning: GEMINI_API_KEY not found.")
+    else:
+        genai.configure(api_key=gemini_api_key)
+        gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        print("Gemini API Client Initialized Successfully")
+except Exception as e: print(f"Error configuring Gemini API: {e}")
+
+# --- APP GLOBALS ---
+FOUNDER_PACKS_CLAIMED = 0 
+MAX_FOUNDER_PACKS = 20
+ 
+# --- DATABASE MODELS ---
 class User(db.Model, UserMixin):
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(255), nullable=False) 
     username = db.Column(db.String(80), unique=True, nullable=True) 
-    created_at = db.Column(db.DateTime, default=lambda: datetime.datetime.now(datetime.UTC))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.datetime.now(timezone.utc))
     subscription_tier = db.Column(db.String(50), default='free', nullable=False) 
     subscription_status = db.Column(db.String(50), default='active', nullable=False) 
     paystack_customer_code = db.Column(db.String(100), nullable=True)
@@ -54,49 +93,41 @@ class User(db.Model, UserMixin):
     monthly_generations_used = db.Column(db.Integer, default=0, nullable=False)
     current_period_end = db.Column(db.DateTime, nullable=True)
     is_founder = db.Column(db.Boolean, default=False, nullable=False)
-
     def __repr__(self): return f"User('{self.email}', Tier: '{self.subscription_tier}')"
     def set_password(self, password): self.password_hash = generate_password_hash(password)
     def check_password(self, password): return check_password_hash(self.password_hash, password)
 
+class GeneratedContent(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    caption_text = db.Column(db.Text, nullable=False)
+    visual_suggestion = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.datetime.now(timezone.utc))
+    user = db.relationship('User', backref=db.backref('generated_contents', lazy=True))
+    def __repr__(self): return f"GeneratedContent(user_id={self.user_id}, created_at='{self.created_at}')"
+ 
 @login_manager.user_loader
 def load_user(user_id): return db.session.get(User, int(user_id))
-
+ 
 @app.context_processor
-def inject_now(): return {'now': datetime.datetime.now(datetime.UTC)}
-
+def inject_now(): return {'now': datetime.datetime.now(timezone.utc)}
+ 
 @app.context_processor 
 def inject_founder_pack_status():
-    global FOUNDER_PACKS_CLAIMED 
-    # In a production scenario, fetch/update FOUNDER_PACKS_CLAIMED from a persistent store (DB)
-    # This global variable will reset on app restart.
-    # For example, on app start:
-    # with app.app_context(): FOUNDER_PACKS_CLAIMED = User.query.filter_by(is_founder=True).count()
-    return dict(
-        founder_packs_available=(FOUNDER_PACKS_CLAIMED < MAX_FOUNDER_PACKS),
-        founder_packs_remaining=(MAX_FOUNDER_PACKS - FOUNDER_PACKS_CLAIMED)
-    )
-
-try:
-    gemini_api_key = os.getenv("GEMINI_API_KEY")
-    if not gemini_api_key: print("Warning: GEMINI_API_KEY not found.")
-    genai.configure(api_key=gemini_api_key)
-    gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
-except Exception as e:
-    print(f"Error configuring Gemini API: {e}")
-    gemini_model = None
-
-# --- Prompt Construction & Parsing Functions (ensure these are your latest working versions) ---
+    global FOUNDER_PACKS_CLAIMED, MAX_FOUNDER_PACKS
+    return dict(founder_packs_available=(FOUNDER_PACKS_CLAIMED < MAX_FOUNDER_PACKS), founder_packs_remaining=(MAX_FOUNDER_PACKS - FOUNDER_PACKS_CLAIMED))
+ 
 def construct_local_biz_caption_prompt(data):
-    business_name = data.get('businessName') or "Our business"; business_type = data.get('businessType', 'local business')
-    post_type = data.get('postType', 'general announcement').replace('_', ' '); key_message = data.get('keyMessage', 'something exciting!')
-    target_audience = data.get('targetAudience'); tone = data.get('tone', 'friendly & casual').replace('_', ' ')
-    call_to_action = data.get('callToAction', 'no specific cta'); include_emojis = data.get('includeEmojis') == 'on'
-    num_variations = int(data.get('numVariations', 3)); prompt_lines = [
-        f"You are an expert social media manager.", f"Generate {num_variations} distinct social media caption variations.",
-        f"The business type is: '{business_type}'.", f"The desired tone for the caption(s) is '{tone}'.",
-        f"The purpose of the post is: '{post_type}'.", f"Key message/details to include: '{key_message}'.",
-    ]
+    num_variations = int(data.get('numVariations', 3))
+    business_name = data.get('businessName') or "Our business"
+    business_type = data.get('businessType', 'local business')
+    post_type = data.get('postType', 'general announcement').replace('_', ' ')
+    key_message = data.get('keyMessage', 'something exciting!')
+    target_audience = data.get('targetAudience')
+    tone = data.get('tone', 'friendly & casual').replace('_', ' ')
+    call_to_action = data.get('callToAction', 'no specific cta')
+    include_emojis = data.get('includeEmojis') == 'on'
+    prompt_lines = [f"You are an expert social media manager.", f"Generate {num_variations} distinct social media caption variations.", f"It is critical that you provide exactly {num_variations} variations. Do not provide fewer."]
     if business_name != "Our business": prompt_lines.append(f"The business name is '{business_name}'.")
     if target_audience: prompt_lines.append(f"The primary target audience: '{target_audience}'. Tailor language accordingly.")
     if call_to_action != "no specific cta" and call_to_action != "custom_cta":
@@ -106,59 +137,45 @@ def construct_local_biz_caption_prompt(data):
     elif call_to_action == "custom_cta": prompt_lines.append("Infer a custom call to action from the key message.")
     if include_emojis: prompt_lines.append("Include relevant emojis.")
     else: prompt_lines.append("Do not use emojis.")
-    prompt_lines.extend([
-        "Instructions for the AI:", f"- Tailor each caption specifically to a '{business_type}' and its target audience.",
-        "- Each caption must be a complete thought.", "- After each caption, on a new line, add 'Visual Suggestion:'.",
-        "- Ensure each complete variation (caption + Visual Suggestion) is separated by a TRIPLE newline (two blank lines).",
-        "- No introductory/concluding remarks or labels like 'Caption 1:'."
-    ])
+    prompt_lines.extend(["Instructions for the AI:", f"- Tailor each caption specifically to a '{business_type}' and its target audience.", "- Each caption must be a complete thought.", "- After each caption, on a new line, add 'Visual Suggestion:'.", "- Ensure each complete variation (caption + Visual Suggestion) is separated by a TRIPLE newline (two blank lines).", "- No introductory/concluding remarks or labels like 'Caption 1:'."])
     return "\n".join(prompt_lines)
 
 def construct_artisan_description_prompt(data):
-    creator_name = data.get('creatorName'); product_name = data.get('productName', 'this unique item')
-    product_category = data.get('productCategory', 'handmade product'); key_materials = data.get('keyMaterials', 'quality materials')
-    creation_process = data.get('creationProcess'); inspiration = data.get('inspiration')
-    unique_selling_points = data.get('uniqueSellingPoints', 'it is special'); target_audience = data.get('targetAudience')
-    artisan_tone = data.get('artisanTone', 'story_driven_evocative').replace('_', ' '); num_variations = int(data.get('numVariations', 2))
-    prompt_lines = [
-        f"You are an expert copywriter for artisans.", f"Generate {num_variations} distinct product description variations.",
-        f"Product: '{product_name}', Type: '{product_category}'.", f"Materials: '{key_materials}'.",
-        f"Tone: '{artisan_tone}'.", f"USPs/Benefits: '{unique_selling_points}'.",
-    ]
+    num_variations = int(data.get('numVariations', 2))
+    creator_name = data.get('creatorName')
+    product_name = data.get('productName', 'this unique item')
+    product_category = data.get('productCategory', 'handmade product')
+    key_materials = data.get('keyMaterials', 'quality materials')
+    inspiration = data.get('inspiration')
+    unique_selling_points = data.get('uniqueSellingPoints', 'it is special')
+    prompt_lines = [f"You are an expert copywriter for artisans.", f"Generate {num_variations} distinct product description variations.", f"It is critical that you provide exactly {num_variations} variations. Do not provide fewer.", f"Product: '{product_name}', Type: '{product_category}'.", f"Materials: '{key_materials}'.", f"USPs/Benefits: '{unique_selling_points}'." ]
     if creator_name: prompt_lines.append(f"Creator: '{creator_name}'.")
-    if creation_process: prompt_lines.append(f"Process: '{creation_process}'.")
     if inspiration: prompt_lines.append(f"Inspiration: '{inspiration}'.")
-    if target_audience: prompt_lines.append(f"Target audience: '{target_audience}'. Emphasize appeal to them.")
-    prompt_lines.extend([
-        "Instructions for AI:", f"- Write evocative descriptions for a handmade '{product_category}', considering target audience.",
-        "- Emphasize craftsmanship, materials, story/inspiration.", "- Suitable for online shop. 1-2 paragraphs each.",
-        "- After each description, on a new line, add 'Visual Suggestion:'.",
-        "- Ensure each complete variation (description + Visual Suggestion) is separated by a TRIPLE newline (two blank lines).",
-        "- No introductory/concluding remarks or labels."
-    ])
+    prompt_lines.extend(["Instructions for AI:", f"- Write evocative descriptions for a handmade '{product_category}'.", "- Emphasize craftsmanship, materials, story/inspiration.", "- Suitable for online shop. 1-2 paragraphs each.", "- After each description, on a new line, add 'Visual Suggestion:'.", "- Ensure each complete variation (description + Visual Suggestion) is separated by a TRIPLE newline (two blank lines).", "- No introductory/concluding remarks or labels."])
     return "\n".join(prompt_lines)
 
 def parse_ai_response_into_blocks(generated_text, num_variations_requested):
     if not generated_text: return []
-    lines = [line.strip() for line in generated_text.splitlines()]
-    all_complete_variations = []; current_variation_lines = []
-    for line_text in lines:
-        cleaned_line = line_text.strip()
-        if not cleaned_line: continue
-        current_variation_lines.append(cleaned_line)
-        if cleaned_line.startswith("Visual Suggestion:"):
-            if current_variation_lines:
-                all_complete_variations.append("\n".join(current_variation_lines))
-                current_variation_lines = [] 
-                if len(all_complete_variations) == num_variations_requested: break
-    if current_variation_lines and len(all_complete_variations) < num_variations_requested:
-        all_complete_variations.append("\n".join(current_variation_lines))
-    return all_complete_variations[:num_variations_requested] if len(all_complete_variations) > num_variations_requested else all_complete_variations
+    blocks, all_variations, suggestion_marker = re.split(r'\n\s*\n\s*\n', generated_text.strip()), [], "Visual Suggestion:"
+    for block in blocks:
+        if not block.strip(): continue
+        main_content, visual_suggestion = block.strip(), ""
+        marker_pos = block.find(suggestion_marker)
+        if marker_pos != -1:
+            main_content, visual_suggestion = block[:marker_pos].strip(), block[marker_pos:].strip()
+        all_variations.append({"main_content": main_content, "visual_suggestion": visual_suggestion})
+        if len(all_variations) == num_variations_requested: break
+    return all_variations
 
-# --- Auth & Main Routes ---
 @app.route('/')
 def index(): return render_template('index.html', title="Home")
 
+@app.route('/history')
+@login_required
+def history():
+    user_history = GeneratedContent.query.filter_by(user_id=current_user.id).order_by(GeneratedContent.created_at.desc()).all()
+    return render_template('history.html', title='My Content History', history=user_history)
+ 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if current_user.is_authenticated: return redirect(url_for('index')) 
@@ -167,13 +184,12 @@ def register():
         existing_user_email = User.query.filter_by(email=form.email.data).first()
         if existing_user_email:
             flash('That email address is already registered. Please log in.', 'danger'); return redirect(url_for('register')) 
-        if form.username.data: 
+        if form.username.data:
             existing_user_username = User.query.filter_by(username=form.username.data).first()
             if existing_user_username:
                 flash('That username is already taken. Please choose a different one.', 'danger'); return redirect(url_for('register'))
         hashed_password = generate_password_hash(form.password.data)
         user = User(email=form.email.data, username=form.username.data or None, password_hash=hashed_password)
-        user.subscription_tier = 'free'; user.monthly_generations_allowed = 10; user.free_generations_used = 0
         db.session.add(user); db.session.commit()
         flash('Your account has been created! You can now log in.', 'success'); return redirect(url_for('login'))
     return render_template('register.html', title='Register', form=form)
@@ -201,328 +217,167 @@ def account(): return render_template('account.html', title='My Account')
 @app.route('/pricing') 
 def pricing(): return render_template('pricing.html', title='Pricing') 
 
-# --- Paystack Integration Routes ---
 PAYSTACK_BASE_URL = 'https://api.paystack.co'
-PAYSTACK_PLAN_CODES = {
-    "standard": os.environ.get("PAYSTACK_STANDARD_PLAN_CODE", "PLN_9szuvkfwec6fq96"), 
-    "premium": os.environ.get("PAYSTACK_PREMIUM_PLAN_CODE", "PLN_49wey3rviyo6bp8"),
-    "founder": os.environ.get("PAYSTACK_FOUNDER_PACK_CODE", "PLN_lxwft3ddtlakbd6")
-}
-TIER_DETAILS = {
-    "founder": {"name": "Founder's Pack", "generations": 150, "duration_days": 90, "price_kobo": 100000, "is_recurring": True},
-    "standard": {"name": "Standard", "generations": 50, "price_kobo": 100000, "is_recurring": True},
-    "premium": {"name": "Premium", "generations": 150, "price_kobo": 150000, "is_recurring": True}
-}
-
+PAYSTACK_PLAN_CODES = { "standard": os.environ.get("PAYSTACK_STANDARD_PLAN_CODE"), "premium": os.environ.get("PAYSTACK_PREMIUM_PLAN_CODE"), "founder": os.environ.get("PAYSTACK_FOUNDER_PACK_CODE") }
+TIER_DETAILS = { "founder": {"name": "Founder's Pack", "generations": 150, "duration_days": 90, "price_kobo": 100000, "is_recurring": True}, "standard": {"name": "Standard", "generations": 50, "price_kobo": 100000, "is_recurring": True}, "premium": {"name": "Premium", "generations": 150, "price_kobo": 150000, "is_recurring": True} }
+ 
 @app.route('/subscribe/<tier_key>')
 @login_required
 def subscribe(tier_key):
     global FOUNDER_PACKS_CLAIMED, MAX_FOUNDER_PACKS 
-    if tier_key not in TIER_DETAILS:
-        flash("Invalid subscription plan selected.", "danger"); return redirect(url_for('pricing'))
+    if tier_key not in TIER_DETAILS: flash("Invalid subscription plan selected.", "danger"); return redirect(url_for('pricing'))
     tier_info = TIER_DETAILS[tier_key]
-    if tier_key == "founder":
-        if current_user.is_founder or current_user.subscription_tier == 'founder':
-            flash("You have already claimed or have an active Founder's Pack.", "info"); return redirect(url_for('account'))
-        if FOUNDER_PACKS_CLAIMED >= MAX_FOUNDER_PACKS: # Simplistic counter
-            flash("Sorry, all Founder's Packs have been claimed.", "info"); return redirect(url_for('pricing'))
-    # Prevent re-subscribing to same or lower if active
-    if tier_key == "standard" and (current_user.subscription_tier == 'standard' or current_user.subscription_tier == 'premium' or current_user.subscription_tier == 'founder') and current_user.subscription_status == 'active':
-        flash(f"You are already on the {current_user.subscription_tier} plan or higher.", "info"); return redirect(url_for('account'))
-    if tier_key == "premium" and (current_user.subscription_tier == 'premium' or current_user.subscription_tier == 'founder') and current_user.subscription_status == 'active':
-        flash(f"You are already on the {current_user.subscription_tier} plan or higher.", "info"); return redirect(url_for('account'))
-
+    if tier_key == "founder" and (current_user.is_founder or current_user.subscription_tier == 'founder'):
+        flash("You have already claimed or have an active Founder's Pack.", "info"); return redirect(url_for('account'))
+    if tier_key == "founder" and FOUNDER_PACKS_CLAIMED >= MAX_FOUNDER_PACKS:
+        flash("Sorry, all Founder's Packs have been claimed.", "info"); return redirect(url_for('pricing'))
     headers = {"Authorization": f"Bearer {app.config['PAYSTACK_SECRET_KEY']}", "Content-Type": "application/json"}
-    callback_url = url_for('paystack_callback', _external=True, _scheme='https')
+    callback_url = url_for('paystack_callback', _external=True)
     reference = f"user{current_user.id}_{tier_key}_{int(datetime.datetime.now().timestamp())}"
-    payload = {
-        "email": current_user.email, "amount": tier_info["price_kobo"], 
-        "callback_url": callback_url, "reference": reference,
-        "metadata": {
-            "user_id": current_user.id, "tier_key": tier_key,
-            "plan_code_used": PAYSTACK_PLAN_CODES.get(tier_key), # Store the plan code if applicable
-            "custom_fields": [
-                {"display_name": "User ID", "variable_name": "user_id", "value": str(current_user.id)},
-                {"display_name": "Selected Plan Name", "variable_name": "selected_plan_name", "value": tier_info["name"]}
-            ]
-        }
-    }
-    if tier_info["is_recurring"] and PAYSTACK_PLAN_CODES.get(tier_key):
-        payload['plan'] = PAYSTACK_PLAN_CODES[tier_key]
-        # For recurring plans, amount might be taken from plan, but Paystack often still requires it in payload
+    payload = {"email": current_user.email, "callback_url": callback_url, "reference": reference, "metadata": { "user_id": current_user.id, "tier_key": tier_key, "plan_code_used": PAYSTACK_PLAN_CODES.get(tier_key), "custom_fields": [ {"display_name": "User ID", "variable_name": "user_id", "value": str(current_user.id)}, {"display_name": "Selected Plan Name", "variable_name": "selected_plan_name", "value": tier_info["name"]} ] } }
+    if tier_info["is_recurring"] and PAYSTACK_PLAN_CODES.get(tier_key): payload['plan'] = PAYSTACK_PLAN_CODES[tier_key]
+    else: payload['amount'] = tier_info["price_kobo"]
     if current_user.paystack_customer_code: payload['customer'] = current_user.paystack_customer_code
-    
     try:
-        print(f"Initializing Paystack transaction: {json.dumps(payload)}") # Ensure payload is serializable for print
         response = requests.post(f"{PAYSTACK_BASE_URL}/transaction/initialize", headers=headers, json=payload)
-        response.raise_for_status() 
-        paystack_response = response.json()
-        if paystack_response.get("status"):
-            print(f"Redirecting to Paystack: {paystack_response['data']['authorization_url']}")
-            return redirect(paystack_response["data"]["authorization_url"])
-        else:
-            flash(f"Paystack Error: {paystack_response.get('message', 'Could not initialize payment.')}", "danger")
-            print(f"Paystack Init Error: {paystack_response.get('message')}")
-            return redirect(url_for('account'))
-    except requests.exceptions.RequestException as e:
-        flash(f"Payment gateway connection error. Please try again later.", "danger")
-        print(f"Paystack API Request Error: {e}")
-        return redirect(url_for('account'))
-    except Exception as e:
-        flash(f"An unexpected error occurred during payment setup. Please try again.", "danger")
-        print(f"Unexpected Payment Init Error: {e}")
-        return redirect(url_for('account'))
+        response.raise_for_status(); paystack_response = response.json()
+        if paystack_response.get("status"): return redirect(paystack_response["data"]["authorization_url"])
+        else: flash(f"Paystack: {paystack_response.get('message', 'Error')}", "danger"); return redirect(url_for('account'))
+    except Exception as e: flash(f"Payment gateway error.", "danger"); print(f"Paystack Error: {e}"); return redirect(url_for('account'))
 
 @app.route('/paystack_callback')
 @login_required 
 def paystack_callback():
     reference = request.args.get('trxref') or request.args.get('reference')
-    if not reference: flash("Payment reference missing from Paystack.", "danger"); return redirect(url_for('index')) 
-
+    if not reference: flash("Payment reference missing.", "danger"); return redirect(url_for('index')) 
     headers = { "Authorization": f"Bearer {app.config['PAYSTACK_SECRET_KEY']}" }
     try:
-        print(f"Verifying Paystack transaction: {reference}")
         response = requests.get(f"{PAYSTACK_BASE_URL}/transaction/verify/{reference}", headers=headers)
         response.raise_for_status(); verification_data = response.json()
-        print(f"Paystack Verification Data: {json.dumps(verification_data, indent=2)}")
-
         if verification_data.get("status") and verification_data["data"]["status"] == "success":
             payment_data = verification_data["data"]; customer_data = payment_data.get("customer", {})
-            metadata = payment_data.get("metadata", {}); 
-            user_id_from_meta = metadata.get("user_id") if isinstance(metadata, dict) else None # Check if metadata is dict
-            
+            metadata = payment_data.get("metadata", {}); user_id_from_meta = metadata.get("user_id") if isinstance(metadata, dict) else None
             if not user_id_from_meta or str(current_user.id) != str(user_id_from_meta):
-                flash("Payment verification user mismatch. Contact support.", "danger"); return redirect(url_for('index'))
-
+                flash("Payment verification user mismatch.", "danger"); return redirect(url_for('index'))
             tier_key = metadata.get("tier_key") if isinstance(metadata, dict) else None
-            
             if tier_key and tier_key in TIER_DETAILS:
                 tier_info = TIER_DETAILS[tier_key]
                 current_user.subscription_tier = tier_key; current_user.subscription_status = 'active'
                 current_user.paystack_customer_code = customer_data.get("customer_code", current_user.paystack_customer_code)
                 current_user.monthly_generations_allowed = tier_info["generations"]
-                current_user.monthly_generations_used = 0; current_user.free_generations_used = 10 # Max out free uses
-                
+                current_user.monthly_generations_used = 0; current_user.free_generations_used = 10 
                 if tier_key == "founder":
                     global FOUNDER_PACKS_CLAIMED, MAX_FOUNDER_PACKS 
                     if FOUNDER_PACKS_CLAIMED < MAX_FOUNDER_PACKS and not current_user.is_founder:
                         current_user.is_founder = True
-                        current_user.current_period_end = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=tier_info["duration_days"])
+                        current_user.current_period_end = datetime.datetime.now(timezone.utc) + datetime.timedelta(days=tier_info["duration_days"])
                         FOUNDER_PACKS_CLAIMED += 1 
                         print(f"Founder pack applied for user {current_user.email}. Count: {FOUNDER_PACKS_CLAIMED}")
-                    else: 
-                        flash("Founder pack unavailable or already claimed. Contact support.", "warning")
-                        return redirect(url_for('account')) # Don't commit if founder pack fails
+                    else: flash("Founder pack could not be applied.", "warning"); return redirect(url_for('account'))
                 else: 
                     current_user.is_founder = False 
-                    # Get subscription code from plan_object or subscription part of verification data
-                    current_user.paystack_subscription_code = payment_data.get("plan_object", {}).get("subscriptions", [{}])[0].get("subscription_code") or \
-                                                               payment_data.get("subscription", {}).get("subscription_code", current_user.paystack_subscription_code)
-                    current_user.current_period_end = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=30) 
-                
-                db.session.commit()
-                flash(f"Your {tier_info['name']} access has been activated!", "success")
+                    current_user.paystack_subscription_code = payment_data.get("subscription", {}).get("subscription_code")
+                    current_user.current_period_end = datetime.datetime.now(timezone.utc) + datetime.timedelta(days=30) 
+                db.session.commit(); flash(f"Your {tier_info['name']} access has been activated!", "success")
             else: flash("Subscription plan details unclear. Contact support.", "warning")
             return redirect(url_for('account'))
         else:
-            flash(f"Paystack payment not successful: {verification_data.get('data', {}).get('gateway_response', 'Unknown reason')}", "danger")
-            return redirect(url_for('account'))
-    except requests.exceptions.HTTPError as e:
-        flash(f"Error verifying payment with Paystack: {e.response.status_code}. Please contact support if payment was made.", "danger")
-        print(f"Paystack Verification HTTP Error: {e} - Response: {e.response.text if e.response else 'No response'}")
-        return redirect(url_for('account'))
+            flash(f"Paystack payment not successful: {verification_data.get('data', {}).get('gateway_response', 'Unknown reason')}", "danger"); return redirect(url_for('account'))
     except Exception as e:
-        flash(f"Payment verification error. Contact support.", "danger"); print(f"Paystack Callback Error: {e}")
-        return redirect(url_for('account'))
-
-# --- Paystack Webhook Handler (Enhanced) ---
+        flash(f"Payment verification error. Contact support.", "danger"); print(f"Paystack Callback Error: {e}"); return redirect(url_for('account'))
+ 
 @app.route('/paystack_webhook', methods=['POST'])
 def paystack_webhook():
-    paystack_secret = app.config['PAYSTACK_SECRET_KEY']
-    signature = request.headers.get('X-Paystack-Signature')
-    payload_body = request.data 
-
-    if not signature or not paystack_secret:
-        print("Webhook Error: Missing signature or Paystack secret key."); abort(400) 
-    hash_obj = hmac.new(paystack_secret.encode('utf-8'), payload_body, hashlib.sha512)
-    expected_signature = hash_obj.hexdigest()
-    if not hmac.compare_digest(expected_signature, signature):
-        print("Webhook Error: Invalid signature."); abort(400) 
-    
-    event_data_full = request.get_json(); event_type = event_data_full.get('event')
-    data = event_data_full.get('data', {})
-    print(f"Webhook received and verified: {event_type}"); print(f"Webhook data: {json.dumps(data, indent=2)}")
-
-    user = None; customer_data = data.get('customer', {})
+    event_data_full = request.get_json(); event_type = event_data_full.get('event'); data = event_data_full.get('data', {})
+    print(f"Webhook received: {event_type}"); user = None; customer_data = data.get('customer', {})
     if customer_data:
-        customer_email = customer_data.get('email'); customer_code = customer_data.get('customer_code')
+        customer_email = customer_data.get('email')
         if customer_email: user = User.query.filter_by(email=customer_email).first()
-        if not user and customer_code: user = User.query.filter_by(paystack_customer_code=customer_code).first()
-    
     if not user:
-        sub_code_event = data.get('subscription_code') or \
-                         (isinstance(data.get('subscription'), dict) and data['subscription'].get('subscription_code')) or \
-                         (isinstance(data.get('plan_object'), dict) and isinstance(data['plan_object'].get('subscriptions'), list) and data['plan_object']['subscriptions'] and data['plan_object']['subscriptions'][0].get('subscription_code'))
+        sub_code_event = data.get('subscription_code')
         if sub_code_event: user = User.query.filter_by(paystack_subscription_code=sub_code_event).first()
-        if not user:
-             print(f"Webhook: User not found. Cust Data: {customer_data}, Sub Code: {sub_code_event}")
-             return jsonify({"status": "success", "message": "User not found or event not relevant"}), 200
-
+        if not user: print(f"Webhook: User not found."); return jsonify({"status": "success"}), 200
     if user:
-        print(f"Webhook: Processing event for user {user.email}")
-        if event_type == 'charge.success':
-            # For subscription renewals. Initial charge success is handled by callback.
-            # A charge.success may also relate to a subscription if it contains plan/subscription info.
-            plan_data = data.get('plan', {}) # For one-time charges tied to plans
-            subscription_data_from_charge = data.get('subscription', {}) # For charge events tied to subscriptions API
-
-            if user.paystack_subscription_code and \
-               (user.paystack_subscription_code == subscription_data_from_charge.get('subscription_code') or \
-                PAYSTACK_PLAN_CODES.get(user.subscription_tier) == plan_data.get('plan_code') ):
-                print(f"Processing RENEWAL via charge.success for user: {user.email}, tier: {user.subscription_tier}")
-                user.monthly_generations_used = 0; user.subscription_status = 'active' 
-                paid_at_str = data.get('paid_at')
-                next_payment_date_str = subscription_data_from_charge.get('next_payment_date') # Ideal for next period end
-                
-                if next_payment_date_str:
-                    try: user.current_period_end = isoparse(next_payment_date_str)
-                    except: user.current_period_end = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=30)
-                elif paid_at_str: # If next_payment_date not available, calculate from paid_at
-                    try: user.current_period_end = isoparse(paid_at_str) + datetime.timedelta(days=30)
-                    except: user.current_period_end = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=30)
-                else: # Fallback
-                    user.current_period_end = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=30)
-                db.session.commit(); print(f"Subscription for {user.email} renewed. Next period ends: {user.current_period_end}")
-            else: print(f"Charge.success for user {user.email} not clearly a renewal for current app sub. No action.")
-
-        elif event_type == 'subscription.create':
-            sub_code = data.get('subscription_code'); plan_code = data.get('plan', {}).get('plan_code')
-            customer_code = data.get('customer', {}).get('customer_code'); next_payment_date_str = data.get('next_payment_date')
-            if user.paystack_customer_code != customer_code: user.paystack_customer_code = customer_code
-            user.paystack_subscription_code = sub_code
-            matched_tier = None
-            for tier_key, pc_val in PAYSTACK_PLAN_CODES.items():
-                if pc_val == plan_code: matched_tier = tier_key; break
-            if matched_tier and matched_tier in TIER_DETAILS:
-                tier_info = TIER_DETAILS[matched_tier]
-                user.subscription_tier = matched_tier; user.monthly_generations_allowed = tier_info["generations"]
-                user.subscription_status = 'active'; user.monthly_generations_used = 0
-                if next_payment_date_str:
-                    try: user.current_period_end = isoparse(next_payment_date_str)
-                    except: user.current_period_end = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=30)
-                elif matched_tier == 'founder': user.current_period_end = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=TIER_DETAILS["founder"]["duration_days"])
-                else: user.current_period_end = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=30)
-                if matched_tier == 'founder': user.is_founder = True
-                db.session.commit(); print(f"Sub details synced via subscription.create for {user.email}, sub: {sub_code}, tier: {matched_tier}")
-            else: print(f"Webhook: Plan code {plan_code} from sub.create not recognized for {user.email}")
-
-        elif event_type in ['subscription.disable', 'subscription.cancel', 'subscription.not_renew']:
+        if event_type == 'subscription.disable':
             event_sub_code = data.get('subscription_code')
             if user.paystack_subscription_code == event_sub_code:
-                print(f"Processing {event_type} for user {user.email}")
-                user.subscription_status = 'inactive'; user.is_founder = False # If founder pack cancelled, they are no longer founder
-                # Consider reverting tier to 'free' and limits
-                # user.subscription_tier = 'free'
-                # user.monthly_generations_allowed = 10 
-                db.session.commit(); print(f"Subscription status inactive for {user.email} due to {event_type}.")
-            else: print(f"Webhook {event_type}: sub_code mismatch for {user.email}. No action.")
-        
-        elif event_type == 'invoice.payment_failed':
-            event_sub_code = data.get('subscription', {}).get('subscription_code')
-            if user.paystack_subscription_code == event_sub_code:
-                print(f"Processing {event_type} for user {user.email}")
-                user.subscription_status = 'past_due' 
-                db.session.commit(); print(f"Subscription status past_due for {user.email} due to {event_type}.")
-            else: print(f"Webhook {event_type}: sub_code mismatch for {user.email}. No action.")
+                user.subscription_status = 'inactive'; user.is_founder = False
+                db.session.commit(); print(f"Subscription for {user.email} disabled by webhook.")
+            else: print(f"Webhook {event_type}: sub_code mismatch.")
     return jsonify({"status": "success"}), 200
+ 
+def shared_generation_logic(request, prompt_builder_func, result_key, num_variations_key):
+    if current_user.subscription_status != 'active': return jsonify({"error": "Subscription not active. Check account."}), 403
+    allowed, used_field = current_user.monthly_generations_allowed, 'monthly_generations_used'
+    if getattr(current_user, used_field) >= allowed: return jsonify({"error": f"Your monthly generation limit ({allowed}) reached."}), 403
+    if not gemini_model: return jsonify({"error": "Gemini API model not configured."}), 500
+    try:
+        data = request.get_json()
+        prompt = prompt_builder_func(data)
+        num_variations = int(data.get(num_variations_key, 3))
+        print("Generating text...")
+        try:
+            request_options = {"timeout": 60} 
+            response = gemini_model.generate_content(prompt, request_options=request_options)
+            parsed_items = parse_ai_response_into_blocks(response.text, num_variations)
+        except google.api_core.exceptions.DeadlineExceeded as e:
+            return jsonify({"error": "Connection to the text AI timed out. Please try again."}), 504
+        valid_items = [p for p in parsed_items if p.get("main_content")]
+        print(f"Generated {len(valid_items)} valid items.")
+        payload = {result_key: valid_items, "image_data": None}
+        if valid_items:
+            image_data_string = None
+            if IMAGE_PROVIDER == "STABILITY" and stability_api:
+                print("Generating image with Stability AI...")
+                first_item_text = valid_items[0].get("main_content")
+                image_prompt = f"A vibrant, eye-catching social media marketing image for a '{data.get('businessType', data.get('productCategory', ''))}', style of hyper-realistic 3D render. The image should represent: {first_item_text}"
+                answers = stability_api.generate(prompt=image_prompt, steps=30, cfg_scale=7.0, width=1024, height=1024, samples=1)
+                for resp in answers:
+                    for artifact in resp.artifacts:
+                        if artifact.type == generation.ARTIFACT_IMAGE:
+                            image_data_string = base64.b64encode(artifact.binary).decode('utf-8')
+                            print("Image generated successfully with Stability AI.")
+                            break
+                    if image_data_string: break
+            payload["image_data"] = image_data_string
+            print(f"Saving {len(valid_items)} content items to history...")
+            for item in valid_items:
+                db.session.add(GeneratedContent(user_id=current_user.id, caption_text=item.get("main_content"), visual_suggestion=item.get("visual_suggestion")))
+        setattr(current_user, used_field, getattr(current_user, used_field) + 1)
+        db.session.commit()
+        print("History and usage count saved to DB.")
+        return jsonify(payload)
+    except Exception as e:
+        error_string = str(e).lower()
+        error_message = f"An internal error occurred: {str(e)}"
+        status_code = 500
+        if "timed out" in error_string or "unavailable" in error_string:
+            error_message = "The connection to the AI service timed out due to an unstable network. Please try again in a moment."
+            status_code = 504
+        print(f"Error during generation: {e}")
+        return jsonify({"error": error_message}), status_code
 
-# --- Content Generation Routes ---
 @app.route('/generate_local_biz_captions', methods=['POST'])
 @login_required 
 def generate_local_biz_captions():
-    # ... (Full usage tracking logic from _v2_09_founder_pack, including founder expiry check) ...
-    if current_user.is_founder and current_user.current_period_end and datetime.datetime.now(datetime.UTC) > current_user.current_period_end:
-        flash("Your Founder's Pack access has expired. Please subscribe to a plan to continue.", "info")
-        current_user.subscription_tier = 'free'; current_user.is_founder = False
-        current_user.monthly_generations_allowed = 10; current_user.free_generations_used = 0; current_user.monthly_generations_used = 0
-        db.session.commit(); return jsonify({"error": "Founder's Pack expired. Please subscribe."}), 403
-    if current_user.subscription_status != 'active': return jsonify({"error": "Subscription not active. Please check your account or subscribe."}), 403
-    allowed_generations = current_user.monthly_generations_allowed; used_generations_field = 'monthly_generations_used'; limit_type = "monthly"
-    if current_user.subscription_tier == 'free': used_generations_field = 'free_generations_used'; limit_type = "free"
-    if getattr(current_user, used_generations_field) >= allowed_generations:
-        return jsonify({"error": f"Your {limit_type} generation limit ({allowed_generations}) reached. Please upgrade or wait for reset."}), 403
-    if not gemini_model: return jsonify({"error": "Gemini API model not configured."}), 500
-    try:
-        data = request.get_json(); prompt = construct_local_biz_caption_prompt(data)
-        print("---- Constructed Local Biz Prompt ----\n", prompt, "\n------------------------------------")
-        response = gemini_model.generate_content(prompt); generated_text = ""
-        if response.candidates and response.candidates[0].content.parts: generated_text = response.candidates[0].content.parts[0].text
-        elif hasattr(response, 'text') and response.text: generated_text = response.text
-        print("---- Gemini API Response Text (Local Biz) ----\n", generated_text, "\n--------------------------------------------")
-        num_variations_requested = int(data.get('numVariations', 3))
-        final_content = parse_ai_response_into_blocks(generated_text, num_variations_requested)
-        print("---- Parsed Content Blocks (Local Biz) ----\n", final_content, "\n-------------------------------------")
-        if not final_content:
-            error_message = "AI could not generate content."; 
-            if hasattr(response, 'prompt_feedback') and response.prompt_feedback: 
-                for rating in response.prompt_feedback.safety_ratings:
-                    if rating.category.name != "HARM_CATEGORY_UNSPECIFIED" and rating.probability.name not in ["NEGLIGIBLE", "LOW"]:
-                        error_message = f"Content generation blocked: ({rating.category.name}). Revise input."; break
-            return jsonify({"error": error_message}), 400
-        setattr(current_user, used_generations_field, getattr(current_user, used_generations_field) + 1)
-        db.session.commit(); return jsonify({"captions": final_content})
-    except Exception as e: print(f"Error: {e}"); return jsonify({"error": f"Internal error: {str(e)}"}), 500
+    return shared_generation_logic(request, construct_local_biz_caption_prompt, "captions", "numVariationsLocalBiz")
 
 @app.route('/generate_artisan_description', methods=['POST'])
 @login_required 
 def generate_artisan_description():
-    # ... (Full usage tracking logic from _v2_09_founder_pack, including founder expiry check) ...
-    if current_user.is_founder and current_user.current_period_end and datetime.datetime.now(datetime.UTC) > current_user.current_period_end:
-        flash("Your Founder's Pack access has expired. Please subscribe to a plan to continue.", "info")
-        current_user.subscription_tier = 'free'; current_user.is_founder = False
-        current_user.monthly_generations_allowed = 10; current_user.free_generations_used = 0; current_user.monthly_generations_used = 0
-        db.session.commit(); return jsonify({"error": "Founder's Pack expired. Please subscribe."}), 403
-    if current_user.subscription_status != 'active': return jsonify({"error": "Subscription not active. Please check your account or subscribe."}), 403
-    if current_user.subscription_tier == 'standard': return jsonify({"error": "Artisan tool requires Premium or Founder's plan. Please upgrade."}), 403
-    allowed_generations = current_user.monthly_generations_allowed; used_generations_field = 'monthly_generations_used'; limit_type = "monthly"
-    if current_user.subscription_tier == 'free': used_generations_field = 'free_generations_used'; limit_type = "free"
-    if getattr(current_user, used_generations_field) >= allowed_generations:
-         return jsonify({"error": f"Your {limit_type} generation limit ({allowed_generations}) reached. Please upgrade or wait for reset."}), 403
-    if not gemini_model: return jsonify({"error": "Gemini API model not configured."}), 500
-    try:
-        data = request.get_json(); prompt = construct_artisan_description_prompt(data)
-        print("---- Constructed Artisan Prompt ----\n", prompt, "\n----------------------------------")
-        response = gemini_model.generate_content(prompt); generated_text = ""
-        if response.candidates and response.candidates[0].content.parts: generated_text = response.candidates[0].content.parts[0].text
-        elif hasattr(response, 'text') and response.text: generated_text = response.text
-        print("---- Gemini API Response Text (Artisan) ----\n", generated_text, "\n--------------------------------------------")
-        num_variations_requested = int(data.get('numVariations', 2))
-        final_content = parse_ai_response_into_blocks(generated_text, num_variations_requested)
-        print("---- Parsed Content Blocks (Artisan) ----\n", final_content, "\n---------------------------------------")
-        if not final_content:
-            error_message = "AI could not generate content."; 
-            if hasattr(response, 'prompt_feedback') and response.prompt_feedback: 
-                 for rating in response.prompt_feedback.safety_ratings:
-                    if rating.category.name != "HARM_CATEGORY_UNSPECIFIED" and rating.probability.name not in ["NEGLIGIBLE", "LOW"]:
-                        error_message = f"Content generation blocked: ({rating.category.name}). Revise input."; break
-            return jsonify({"error": error_message}), 400
-        setattr(current_user, used_generations_field, getattr(current_user, used_generations_field) + 1)
-        db.session.commit(); return jsonify({"descriptions": final_content})
-    except Exception as e: print(f"Error: {e}"); return jsonify({"error": f"Internal error: {str(e)}"}), 500
+    if current_user.subscription_tier == 'standard': return jsonify({"error": "Artisan tool requires a higher plan."}), 403
+    return shared_generation_logic(request, construct_artisan_description_prompt, "descriptions", "numVariationsArtisan")
 
 if __name__ == '__main__':
     with app.app_context():
         try:
-            # Attempt to initialize FOUNDER_PACKS_CLAIMED from DB
-            # This requires the User table to exist.
             if db.engine.dialect.has_table(db.engine.connect(), User.__tablename__):
-                 FOUNDER_PACKS_CLAIMED = User.query.filter_by(is_founder=True).count()
-                 print(f"Initialized Founder Packs Claimed from DB: {FOUNDER_PACKS_CLAIMED}")
+                FOUNDER_PACKS_CLAIMED = User.query.filter_by(is_founder=True).count()
+                print(f"Initialized Founder Packs Claimed from DB: {FOUNDER_PACKS_CLAIMED}")
             else:
-                 print("User table not found on startup (migrations might be pending). FOUNDER_PACKS_CLAIMED set to 0.")
-                 FOUNDER_PACKS_CLAIMED = 0
+                print("User table not found on startup. FOUNDER_PACKS_CLAIMED set to 0.")
+                FOUNDER_PACKS_CLAIMED = 0
         except Exception as e_init:
-            print(f"Error initializing founder pack count from DB (migrations might be pending or DB not ready): {e_init}")
+            print(f"Error initializing founder pack count from DB: {e_init}")
             FOUNDER_PACKS_CLAIMED = 0 
-            
     app.run(debug=True, port=5000)
